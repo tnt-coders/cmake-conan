@@ -689,28 +689,21 @@ class TestMSVCArch:
     @windows
     def test_msvc_arm64(self, capfd, basic_cmake_project):
         source_dir, binary_dir = basic_cmake_project
-        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -G "Visual Studio 16 2019" -A ARM64')
+        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -G "Visual Studio 17 2022" -A ARM64')
         out, _ = capfd.readouterr()
         assert "arch=armv8" in out
 
     @windows
-    def test_msvc_arm(self, capfd, basic_cmake_project):
-        source_dir, binary_dir = basic_cmake_project
-        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -G "Visual Studio 16 2019" -A ARM')
-        out, _ = capfd.readouterr()
-        assert "arch=armv7" in out
-
-    @windows
     def test_msvc_x86_64(self, capfd, basic_cmake_project):
         source_dir, binary_dir = basic_cmake_project
-        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -G "Visual Studio 16 2019" -A x64')
+        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -G "Visual Studio 17 2022" -A x64')
         out, _ = capfd.readouterr()
         assert "arch=x86_64" in out
 
     @windows
     def test_msvc_x86(self, capfd, basic_cmake_project):
         source_dir, binary_dir = basic_cmake_project
-        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -G "Visual Studio 16 2019" -A Win32')
+        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -G "Visual Studio 17 2022" -A Win32')
         out, _ = capfd.readouterr()
         assert "arch=x86" in out
 
