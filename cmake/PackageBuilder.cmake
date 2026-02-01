@@ -149,7 +149,6 @@ function(package_install)
         # Create an export package of the targets
         # Use GNUInstallDirs and COMPONENTS
         # See "Deep CMake for Library Authors" https://www.youtube.com/watch?v=m0DwB4OvDXk
-        # TODO: Implement COMPONENTS
         install(
                 TARGETS ${targets}
                 EXPORT ${PROJECT_NAME}Targets
