@@ -461,15 +461,6 @@ endfunction()
 
 
 function(conan_install)
-    if(EXISTS "${CMAKE_SOURCE_DIR}/conanfile.txt")
-        message(STATUS "Found conanfile.txt")
-    elseif(EXISTS "${CMAKE_SOURCE_DIR}/conanfile.py")
-        message(STATUS "Found conanfile.py")
-    else()
-        # No conanfile, skip install
-        return()
-    endif()
-
     set(conan_output_folder ${CMAKE_BINARY_DIR}/conan)
     # Invoke "conan install" with the provided arguments
     set(conan_args -of=${conan_output_folder})
@@ -551,6 +542,42 @@ function(conan_version_check)
     endif()
 endfunction()
 
+# Function to check if a conan package exists in the local cache or in any known remote
+function(conan_package_exists package_ref out_var)
+    # Check local cache first
+    execute_process(
+        COMMAND conan list ${package_ref}
+        RESULT_VARIABLE _result
+        OUTPUT_VARIABLE _output
+        ERROR_VARIABLE _error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+    )
+    
+    # Check if output contains "not found" error
+    if(_result EQUAL 0 AND NOT _output MATCHES "ERROR.*not found" AND NOT _error MATCHES "ERROR.*not found")
+        set(${out_var} TRUE PARENT_SCOPE)
+        return()
+    endif()
+    
+    # If not in cache, check all remotes
+    execute_process(
+        COMMAND conan list ${package_ref} -r=*
+        RESULT_VARIABLE _result
+        OUTPUT_VARIABLE _output
+        ERROR_VARIABLE _error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+    )
+    
+    # Check if output contains "not found" error
+    if(_result EQUAL 0 AND NOT _output MATCHES "ERROR.*not found" AND NOT _error MATCHES "ERROR.*not found")
+        set(${out_var} TRUE PARENT_SCOPE)
+    else()
+        set(${out_var} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
 
 macro(construct_profile_argument argument_variable profile_list)
     set(${argument_variable} "")
@@ -586,14 +613,82 @@ macro(conan_provide_dependency method package_name)
         endif()
         construct_profile_argument(_host_profile_flags CONAN_HOST_PROFILE)
         construct_profile_argument(_build_profile_flags CONAN_BUILD_PROFILE)
+
+        # Get a list of recipes for "creatable" requirements
+        # cmake-conan will attempt to create these requirements from source if not available on known remotes
+        set(_recipes)
+
         if(EXISTS "${CMAKE_SOURCE_DIR}/conanfile.py")
             file(READ "${CMAKE_SOURCE_DIR}/conanfile.py" outfile)
+
+            # Parse creatable requirements from conanfile.py
+            string(REGEX MATCHALL "[^\n#]*self[.]requires[^\n]*" _recipe_matches "${outfile}")
+            foreach(_recipe_match IN LISTS _recipe_matches)
+                string(
+                    REGEX MATCH
+                    "self[.]requires[(]\"(([^/]+)/([0-9.]+)([@]([^/\"]+)(/([^\"]+))?[^\"]*)?)\"[)].*[#].*recipe:.*(https://[^ ]+[.]git)"
+                    _recipe_found
+                    "${_recipe_match}"
+                )
+
+                if(_recipe_found)
+                    list(APPEND _recipes "${CMAKE_MATCH_2}")
+                    set(_recipe_${CMAKE_MATCH_2}_ref "${CMAKE_MATCH_1}")
+                    set(_recipe_${CMAKE_MATCH_2}_version "${CMAKE_MATCH_3}")
+                    # skip CMAKE_MATCH_4 since it is the entire @user/channel grouped
+                    set(_recipe_${CMAKE_MATCH_2}_user "${CMAKE_MATCH_5}")
+                    # skipe CMAKE_MATCH_6 since it is the entire /channel with the slash
+                    set(_recipe_${CMAKE_MATCH_2}_channel "${CMAKE_MATCH_7}")
+                    set(_recipe_${CMAKE_MATCH_2}_repo "${CMAKE_MATCH_8}")
+                endif()
+            endforeach()
+
             if(NOT "${outfile}" MATCHES ".*CMakeDeps.*")
                 message(WARNING "Cmake-conan: CMakeDeps generator was not defined in the conanfile")
             endif()
             set(generator "")
         elseif (EXISTS "${CMAKE_SOURCE_DIR}/conanfile.txt")
             file(READ "${CMAKE_SOURCE_DIR}/conanfile.txt" outfile)
+
+            # Parse createable requirements from conanfile.txt
+            # Find the [requires] section
+            string(REGEX MATCH "\\[requires\\][^\n]*\n([^[]*)" _requires_section "${outfile}")
+
+            if(_requires_section)
+                # Get the content after [requires] (CMAKE_MATCH_1)
+                set(_requires_content "${CMAKE_MATCH_1}")
+                
+                # Split into lines
+                string(REGEX REPLACE "\r?\n" ";" _requirement_lines "${_requires_content}")
+                foreach(_requirement_line IN LISTS _requirement_lines)
+
+                    # Skip empty lines and lines that are just whitespace
+                    string(STRIP "${_requirement_line}" _requirement_line_stripped)
+                    if(NOT _requirement_line_stripped)
+                        continue()
+                    endif()
+                    
+                    # Match: package/version # https://repo.git
+                    string(
+                        REGEX MATCH
+                        "(([^/#@]+)/([0-9.]+)([@]([^/#]+)(/([^#]+))?)?).*[#].*recipe:.*(https://[^ ]+[.]git)"
+                        _recipe_found
+                        "${_requirement_line}"
+                    )
+                    
+                    if(_recipe_found)
+                        list(APPEND _recipes "${CMAKE_MATCH_2}")
+                        set(_recipe_${CMAKE_MATCH_2}_ref "${CMAKE_MATCH_1}")
+                        set(_recipe_${CMAKE_MATCH_2}_version "${CMAKE_MATCH_3}")
+                        # skip CMAKE_MATCH_4 since it is the entire @user/channel grouped
+                        set(_recipe_${CMAKE_MATCH_2}_user "${CMAKE_MATCH_5}")
+                        # skipe CMAKE_MATCH_6 since it is the entire /channel with the slash
+                        set(_recipe_${CMAKE_MATCH_2}_channel "${CMAKE_MATCH_7}")
+                        set(_recipe_${CMAKE_MATCH_2}_repo "${CMAKE_MATCH_8}")
+                    endif()
+                endforeach()
+            endif()
+
             if(NOT "${outfile}" MATCHES ".*CMakeDeps.*")
                 message(WARNING "Cmake-conan: CMakeDeps generator was not defined in the conanfile. "
                         "Please define the generator as it will be mandatory in the future")
@@ -628,6 +723,24 @@ macro(conan_provide_dependency method package_name)
             if(NOT _multiconfig_generator AND NOT _build_config STREQUAL "${CMAKE_BUILD_TYPE}")
                 set(_self_build_config -s &:build_type=${CMAKE_BUILD_TYPE})
             endif()
+
+            # Check remotes and cache for packages that can be recreated from git
+            foreach(_recipe IN LISTS _recipes)
+                message(STATUS "RECIPE FOUND: ${_recipe_${_recipe}_ref}: ${_recipe_${_recipe}_repo}")
+
+                conan_package_exists(${_recipe_${_recipe}_ref} _recipe_${_recipe}_exists)
+                if(NOT _recipe_${_recipe}_exists)
+                    message(STATUS "${_recipe_${_recipe}_ref} does not exist in cache or any known remote... attempting to create from source.")
+
+                    #TODO
+                    # 1. checkout into temporary folder from git
+                    # 2. run conan-create with necessary arguments
+                    # 3. remove temporary folder
+
+                endif()
+
+            endforeach()
+
             conan_install(${_host_profile_flags} ${_build_profile_flags} -s build_type=${_build_config} ${_self_build_config} ${CONAN_INSTALL_ARGS} ${generator})
         endforeach()
         unset(_self_build_config)
