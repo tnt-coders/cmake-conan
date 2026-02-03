@@ -62,11 +62,12 @@ mypackage/1.2.3  #recipe: https://github.com/user/mypackage.git
 private/2.0.0@myuser/stable  #recipe: https://github.com/org/private.git
 ```
 
-When cmake-conan encounters a missing package with a `#recipe:` annotation, it will:
-1. Clone the specified Git repository
-2. Checkout the tag or branch matching the version (see below)
-3. Run `conan create` to build the package and publish it to your local cache
-4. Continue with the normal `conan install` process
+When cmake-conan encounters a package with a `#recipe:` annotation, it performs the following checks:
+
+1. **Remote check:** If the package exists on a configured Conan remote, it is used directly (no build required).
+2. **Cache + tag check:** If the package exists in the local cache and the version resolves to a Git tag, the cached package is used (tags are immutable).
+3. **Cache + branch check:** If the package exists in the local cache but the version resolves to a Git branch, cmake-conan compares the local and remote commit hashes. The package is only rebuilt if the branch has new commits.
+4. **Build from source:** If none of the above conditions are met, cmake-conan clones the repository, checks out the appropriate tag/branch, runs `conan create`, and continues with `conan install`.
 
 ### Version Resolution: Tags vs Branches
 
@@ -77,11 +78,11 @@ The Git branch/tag to create the package from is derived from the package versio
 | `1.2.3` | `v1.2.3` |
 | `develop` | `develop` |
 
-The derived Git ref is checked against the repository for a matching tag first, then for a matching branch. Tags are immutable, making them the preferred method for minimizing build times and ensuring reproducible builds.
+The derived Git ref is checked against the repository for a matching tag first, then for a matching branch.
 
-**Tags:** If a matching tag is found, the package will be created from the tagged commit. Once the package is built and cached, it will not be rebuilt.
+**Tags:** Tags are immutable, making them the preferred method for minimizing build times and ensuring reproducible builds.
 
-**Branches:** If a matching tag is not found, cmake-conan will check for a matching branch. Branches are useful during active development when you want to consume a package without tagging an untested version. However, because branches are mutable, cmake-conan checks for new remote commits on each build and rebuilds the package when changes are detected.
+**Branches:** Branches are useful during active development when you want to consume a package without tagging an untested version. However, because branches are mutable, cmake-conan checks for new remote commits on each build and rebuilds the package when changes are detected.
 
 If the package version string does not resolve to a valid Git tag/branch name, CMake generation will abort with an appropriate error message.
 
