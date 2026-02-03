@@ -35,6 +35,8 @@ set(CONAN_MINIMUM_VERSION 2.0.5)
 cmake_policy(PUSH)
 cmake_minimum_required(VERSION 3.24)
 
+# Required to create dependencies from recipe
+find_package(Git REQUIRED)
 
 function(detect_os os os_api_level os_sdk os_subsystem os_version)
     # it could be cross compilation
@@ -459,6 +461,54 @@ function(conan_profile_detect_default)
     endif()
 endfunction()
 
+function(conan_create)
+    set(options)
+    set(one_value_args NAME VERSION USER CHANNEL GIT_REPOSITORY)
+    set(multi_value_args CONAN_CREATE_ARGS)
+    cmake_parse_arguments(args "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
+
+    set(recipe_path ${CMAKE_BINARY_DIR}/conan/_recipes/${args_NAME})
+
+    # Remove the corresponding recipe if one already exists
+    if(EXISTS ${recipe_path})
+        file(REMOVE_RECURSE ${recipe_path})
+    endif()
+
+    # Fetch the content from git
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} clone --depth 1 --branch v${args_VERSION} --recurse-submodules ${args_GIT_REPOSITORY} ${recipe_path}
+        RESULT_VARIABLE return_code
+        OUTPUT_VARIABLE git_stdout
+        ERROR_VARIABLE git_stderr
+        ECHO_ERROR_VARIABLE    # show the text output regardless
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+    if(NOT "${return_code}" STREQUAL "0")
+        message(FATAL_ERROR "CMake-Conan: Failed to checkout tag v${args_VERSION} from ${args_GIT_REPOSITORY}")
+    endif()
+
+    set(reference_args "--name=${args_NAME}" "--version=${args_VERSION}")
+    if(args_USER)
+        list(APPEND reference_args "--user=${args_USER}")
+        if(args_CHANNEL)
+            list(APPEND reference_args "--channel=${args_CHANNEL}")
+        endif()
+    endif()
+
+    # # Run conan create
+    execute_process(
+        COMMAND ${CONAN_COMMAND} create ${recipe_path} ${reference_args} ${args_CONAN_CREATE_ARGS}
+        RESULT_VARIABLE return_code
+        OUTPUT_VARIABLE conan_stdout
+        ERROR_VARIABLE conan_stderr
+        ECHO_ERROR_VARIABLE    # show the text output regardless
+        WORKING_DIRECTORY ${recipe_path})
+
+    if(NOT "${return_code}" STREQUAL "0")
+        message(FATAL_ERROR "Conan create failed='${return_code}'")
+    endif()
+endfunction()
+
 
 function(conan_install)
     set(conan_output_folder ${CMAKE_BINARY_DIR}/conan)
@@ -547,31 +597,31 @@ function(conan_package_exists package_ref out_var)
     # Check local cache first
     execute_process(
         COMMAND conan list ${package_ref}
-        RESULT_VARIABLE _result
-        OUTPUT_VARIABLE _output
-        ERROR_VARIABLE _error
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_STRIP_TRAILING_WHITESPACE
     )
     
     # Check if output contains "not found" error
-    if(_result EQUAL 0 AND NOT _output MATCHES "ERROR.*not found" AND NOT _error MATCHES "ERROR.*not found")
+    if(result EQUAL 0 AND NOT output MATCHES "ERROR.*not found" AND NOT error MATCHES "ERROR.*not found")
         set(${out_var} TRUE PARENT_SCOPE)
         return()
     endif()
     
-    # If not in cache, check all remotes
+    # If not in cache, check all known remotes
     execute_process(
         COMMAND conan list ${package_ref} -r=*
-        RESULT_VARIABLE _result
-        OUTPUT_VARIABLE _output
-        ERROR_VARIABLE _error
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_STRIP_TRAILING_WHITESPACE
     )
     
     # Check if output contains "not found" error
-    if(_result EQUAL 0 AND NOT _output MATCHES "ERROR.*not found" AND NOT _error MATCHES "ERROR.*not found")
+    if(result EQUAL 0 AND NOT output MATCHES "ERROR.*not found" AND NOT error MATCHES "ERROR.*not found")
         set(${out_var} TRUE PARENT_SCOPE)
     else()
         set(${out_var} FALSE PARENT_SCOPE)
@@ -729,20 +779,26 @@ macro(conan_provide_dependency method package_name)
             endif()
 
             # Check remotes and cache for packages that can be recreated from git
+
+            # TODO THIS IS NOT WORKING
+
             foreach(_recipe IN LISTS _recipes)
-                message(STATUS "RECIPE FOUND: ${_recipe_${_recipe}_ref}: ${_recipe_${_recipe}_repo}")
+                message(STATUS "CMake-Conan: Found recipe for ${_recipe_${_recipe}_ref}: ${_recipe_${_recipe}_repo}")
 
                 conan_package_exists(${_recipe_${_recipe}_ref} _recipe_${_recipe}_exists)
                 if(NOT _recipe_${_recipe}_exists)
-                    message(STATUS "${_recipe_${_recipe}_ref} does not exist in cache or any known remote... attempting to create from source.")
+                    message(STATUS "CMake-Conan: ${_recipe_${_recipe}_ref} does not exist in cache or any known remote... attempting to create from source.")
 
-                    #TODO
-                    # 1. checkout into temporary folder from git
-                    # 2. run conan-create with necessary arguments
-                    # 3. remove temporary folder
-
+                    # Create the package from source
+                    conan_create(
+                        NAME ${_recipe}
+                        VERSION ${_recipe_${_recipe}_version}
+                        USER ${_recipe_${_recipe}_user}
+                        CHANNEL ${_recipe_${_recipe}_channel}
+                        GIT_REPOSITORY ${_recipe_${_recipe}_repo}
+                        CONAN_CREATE_ARGS ${_host_profile_flags} ${_build_profile_flags} -s build_type=${_build_config} ${_self_build_config} ${CONAN_INSTALL_ARGS}
+                    )
                 endif()
-
             endforeach()
 
             conan_install(${_host_profile_flags} ${_build_profile_flags} -s build_type=${_build_config} ${_self_build_config} ${CONAN_INSTALL_ARGS} ${generator})
