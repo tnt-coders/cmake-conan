@@ -70,18 +70,18 @@ When cmake-conan encounters a missing package with a `#recipe:` annotation, it w
 
 ### Version Resolution: Tags vs Branches
 
-The Git ref is automatically derived from the conan package version in the `requires` statement. If the version starts with a number, it is assumed to be a semver version string and a `v` prefix is added when searching for the ref in Git:
+The Git ref is derived from the package version in the `requires` statement. Versions starting with a number are assumed to be semver strings and get a `v` prefix:
 
 | Version | Derived Git Ref |
 |---------|-----------------|
 | `1.2.3` | `v1.2.3` |
 | `develop` | `develop` |
 
-The derived ref is then checked against the repository—first for a matching tag, then for a matching branch. The ref's behavior depends on what exists in the repository:
+The derived ref is checked against the repository for a matching tag first, then for a matching branch.
 
-**Tags (Recommended):** Version tags are assumed to be immutable and are the preferred method. They minimize build times and preserve maximum reproducibility. Once a tagged package is built and cached, it will not be rebuilt.
+**Tags (Recommended):** Tags are immutable, making them the preferred method for minimizing build times and ensuring reproducible builds. Once a tagged package is built and cached, it will not be rebuilt.
 
-**Branches:** Packages can come from git branches instead of tags, which is useful for ongoing development when you want to test consuming a package without tagging an untested version. However, because branches are not immutable, cmake-conan will check if the remote branch has new commits and rebuild the package when changes are detected. This may result in excess rebuilds if the branch is actively being developed.
+**Branches:** Branches are useful during active development when you want to consume a package without tagging an untested version. However, because branches are mutable, cmake-conan checks for new remote commits on each build and rebuilds the package when changes are detected.
 
 ## Known limitations with Conan 2.0
 
