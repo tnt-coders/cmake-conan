@@ -86,9 +86,7 @@ The derived Git ref is checked against the repository for a matching tag first, 
 
 If the package version string does not resolve to a valid Git tag/branch name, CMake generation will abort with an appropriate error message.
 
----
-
-#### Tag Immutability
+### Tag Immutability
 
 > [!CAUTION]
 > **Tags are assumed to be immutable.** If a tag is moved after a package has already been published to the cache (generally considered bad practice), you must manually remove the associated package from the cache with `conan remove <package_ref>` to force a rebuild.
