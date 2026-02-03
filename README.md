@@ -40,9 +40,7 @@ cmake --build build --config Release
 
 * When first invoking CMake to configure the project, pass `-DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=[path-to-cmake-conan]/conan_provider.cmake`. This will ensure that `conan install` is invoked from within CMake. This integration **does not require making any changes to your `CMakeLists.txt` scripts**.
 
----
-
-### Building package recipes from Git
+## Building package recipes from Git
 
 ***Package not found on conancenter or any configured remote? Not even in your local cache!? cmake-conan has you covered!***
 
@@ -70,7 +68,7 @@ When cmake-conan encounters a missing package with a `#recipe:` annotation, it w
 3. Run `conan create` to build the package and publish it to your local cache
 4. Continue with the normal `conan install` process
 
-#### Version Resolution: Tags vs Branches
+### Version Resolution: Tags vs Branches
 
 The Git ref (tag or branch name) is automatically derived from the conan package version in the `requires` statement:
 
@@ -83,18 +81,14 @@ The Git ref (tag or branch name) is automatically derived from the conan package
 
 **Branches:** Packages can come from git branches instead of tags, which is useful for ongoing development when you want to test consuming a package without tagging an untested version. However, because branches are not immutable, cmake-conan will check if the remote branch has new commits and rebuild the package when changes are detected. This may result in excess rebuilds if the branch is actively being developed.
 
----
-
-### Known limitations with Conan 2.0
+## Known limitations with Conan 2.0
 
 * Only the `CMakeDeps` generator is specified - for build settings that would otherwise be provided by `CMakeToolchain` (for example, the compiler itself or other global build settings) please invoke Conan separately as per [documentation](https://docs.conan.io/2/tutorial/consuming_packages/build_simple_cmake_project.html).
 * Currently this only works such that Conan can satisfy invocations to CMake's `find_package`. For dependencies that have logic outside of `find_package`, for example, by making direct calls to `find_program`, `find_library`, `find_path` or `find_file`, these may not work correctly.
 * When using a single-configuration CMake generator, you must specify a valid `CMAKE_BUILD_TYPE` (can't be left blank). Alternatively, `CONAN_INSTALL_BUILD_CONFIGURATIONS` can be set to a non-empty list of build types (see next section).
 * Deriving Conan settings is currently only supported on the most common platforms with the most popular compilers.
 
----
-
-### Customizing Conan profiles
+## Customizing Conan profiles
 The CMake-Conan dependency provider will create a Conan profile where the settings (`os`, `arch`, `compiler`, `build_type`) are retrieved from what CMake has detected for the current build. Conan uses two profiles for dependencies, the _host_ and the _build_ profiles. You can read more about them [here](https://docs.conan.io/2.0/tutorial/consuming_packages/cross_building_with_conan.html?highlight=build%20profile#conan-two-profiles-model-build-and-host-profiles). In CMake-Conan, the default behaviour is as follows:
 
 * Conan host profile: settings detected from CMake. For anything that cannot be detected from CMake, it falls back to the `default` Conan profile.
@@ -121,9 +115,7 @@ For example:
 * `-DCONAN_INSTALL_BUILD_CONFIGURATIONS=Release;Debug`: execute `conan install` for both `Release` and `Debug` build types with a multi-configuration generator.
 * `-DCONAN_INSTALL_BUILD_CONFIGURATIONS=Release`: execute `conan install` once for just the `Release` build type, applicable for both single- and multi-configuration generators.
 
----
-
-### Customizing the invocation of Conan install
+## Customizing the invocation of Conan install
 The CMake-Conan dependency provider will autodetect and pass the profile information as described above. If the `conan install` command invocation needs to be customized further, the `CONAN_INSTALL_ARGS` variable can be used. 
 * By default, `CONAN_INSTALL_ARGS` is initialised to pass `--build=missing`. If you customize this variable, please be aware that Conan will revert to its default behaviour unless you specify the `--build` flag.
 * Some arguments are reserved for the dependency provider implementation and must not be set in `CONAN_INSTALL_ARGS`:
@@ -131,9 +123,6 @@ The CMake-Conan dependency provider will autodetect and pass the profile informa
   * The output format (`--format`).
   * The build type setting (`-s build_type=...`).
 * Values are semi-colon separated, e.g. `--build=never;--update;--lockfile-out=''`
-
-
----
 
 ## Development, contributors
 
