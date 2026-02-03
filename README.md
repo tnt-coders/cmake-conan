@@ -70,18 +70,20 @@ When cmake-conan encounters a missing package with a `#recipe:` annotation, it w
 
 ### Version Resolution: Tags vs Branches
 
-The Git ref is derived from the package version in the `requires` statement. Versions starting with a number are assumed to be semver strings and get a `v` prefix:
+The Git branch/tag to create the package from is derived from the package version in the `requires` statement. Versions starting with a number are assumed to be semver strings and get a `v` prefix:
 
 | Version | Derived Git Ref |
 |---------|-----------------|
 | `1.2.3` | `v1.2.3` |
 | `develop` | `develop` |
 
-The derived ref is checked against the repository for a matching tag first, then for a matching branch.
+The derived Git ref is checked against the repository for a matching tag first, then for a matching branch. Tags are immutable, making them the preferred method for minimizing build times and ensuring reproducible builds.
 
-**Tags (Recommended):** Tags are immutable, making them the preferred method for minimizing build times and ensuring reproducible builds. Once a tagged package is built and cached, it will not be rebuilt.
+**Tags:** If a matching tag is found, the package will be created from the tagged commit. Once the package is built and cached, it will not be rebuilt.
 
-**Branches:** Branches are useful during active development when you want to consume a package without tagging an untested version. However, because branches are mutable, cmake-conan checks for new remote commits on each build and rebuilds the package when changes are detected.
+**Branches:** If a matching tag is not found, cmake-conan will check for a matching branch. Branches are useful during active development when you want to consume a package without tagging an untested version. However, because branches are mutable, cmake-conan checks for new remote commits on each build and rebuilds the package when changes are detected.
+
+If the package version string does not resolve to a valid Git tag/branch name, CMake generation will abort with an appropriate error message.
 
 ## Known limitations with Conan 2.0
 
