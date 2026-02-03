@@ -474,9 +474,9 @@ function(conan_create)
         file(REMOVE_RECURSE ${recipe_path})
     endif()
 
-    # Fetch the content from git (include tags so git describe works)
+    # Fetch the content from git
     execute_process(
-        COMMAND ${GIT_EXECUTABLE} clone --depth 1 --branch v${args_VERSION} --recurse-submodules --tags ${args_GIT_REPOSITORY} ${recipe_path}
+        COMMAND ${GIT_EXECUTABLE} clone --depth 1 --branch v${args_VERSION} --recurse-submodules ${args_GIT_REPOSITORY} ${recipe_path}
         RESULT_VARIABLE return_code
         OUTPUT_VARIABLE git_stdout
         ERROR_VARIABLE git_stderr
@@ -486,6 +486,11 @@ function(conan_create)
     if(NOT "${return_code}" STREQUAL "0")
         message(FATAL_ERROR "CMake-Conan: Failed to checkout tag v${args_VERSION} from ${args_GIT_REPOSITORY}")
     endif()
+
+    # Fetch the specific tag so git describe works with shallow clones
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} fetch --depth 1 origin tag v${args_VERSION}
+        WORKING_DIRECTORY ${recipe_path})
 
     set(reference_args "--name=${args_NAME}" "--version=${args_VERSION}")
     if(args_USER)
