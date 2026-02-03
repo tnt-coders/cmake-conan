@@ -40,7 +40,9 @@ cmake --build build --config Release
 
 * When first invoking CMake to configure the project, pass `-DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=[path-to-cmake-conan]/conan_provider.cmake`. This will ensure that `conan install` is invoked from within CMake. This integration **does not require making any changes to your `CMakeLists.txt` scripts**.
 
-### Building packages from source repositories
+### Building package recipes from Git
+
+**Can't find your package on ConanCenter or any configured remote? cmake-conan has you covered!**
 
 If a required package is not available in any configured Conan remote or in your local cache, cmake-conan can automatically fetch the recipe from a Git repository and build it from source. This is useful for private packages or packages not yet published to a remote.
 
@@ -66,13 +68,7 @@ When cmake-conan encounters a missing package with a `#recipe:` annotation, it w
 3. Run `conan create` to build the package and publish it to your local cache
 4. Continue with the normal `conan install` process
 
-**Important:** The Git repository must have a tag matching the exact version specified in your requirements, using the `v<version>` format (e.g., `v1.2.3` for version `1.2.3`). If no matching tag exists, the build will fail. 
-
-```bash
-cd [your-project]
-mkdir build
-cmake -B build -S . -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=[path-to-cmake-conan]/conan_provider.cmake -DCMAKE_BUILD_TYPE=Release
-```
+**Important:** The Git repository must have a tag matching the exact version specified in your requirements, using the `v<version>` format (e.g., `v1.2.3` for version `1.2.3`). If no matching tag exists, the package creation will abort.
 
 ### Known limitations with Conan 2.0
 
