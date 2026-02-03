@@ -38,7 +38,35 @@ cmake --build build --config Release
 
 * Ensure you have placed a `conanfile.txt` or `conanfile.py` at the root of your project, listing your requirements. You can see [conanfile.txt](example/conanfile.txt) for an example, or check the Conan documentation for `conanfile`: [.txt docs](https://docs.conan.io/2/reference/conanfile_txt.html), [.py docs](https://docs.conan.io/2/reference/conanfile/attributes.html#requirements).
 
-* When first invoking CMake to configure the project, pass `-DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=[path-to-cmake-conan]/conan_provider.cmake`. This will ensure that `conan install` is invoked from within CMake. This integration **does not require making any changes to your `CMakeLists.txt` scripts**. 
+* When first invoking CMake to configure the project, pass `-DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=[path-to-cmake-conan]/conan_provider.cmake`. This will ensure that `conan install` is invoked from within CMake. This integration **does not require making any changes to your `CMakeLists.txt` scripts**.
+
+### Building packages from source repositories
+
+If a required package is not available in any configured Conan remote or in your local cache, cmake-conan can automatically fetch the recipe from a Git repository and build it from source. This is useful for private packages or packages not yet published to a remote.
+
+To enable this feature, add a `#recipe:` comment after the requirement specifying the Git repository URL:
+
+**conanfile.py:**
+```python
+def requirements(self):
+    self.requires("mypackage/1.2.3")  #recipe: https://github.com/user/mypackage.git
+    self.requires("private/2.0.0@myuser/stable")  #recipe: https://github.com/org/private.git
+```
+
+**conanfile.txt:**
+```ini
+[requires]
+mypackage/1.2.3  #recipe: https://github.com/user/mypackage.git
+private/2.0.0@myuser/stable  #recipe: https://github.com/org/private.git
+```
+
+When cmake-conan encounters a missing package with a `#recipe:` annotation, it will:
+1. Clone the specified Git repository
+2. Checkout the tag matching the version (using the format `v<version>`, e.g., `v1.2.3`)
+3. Run `conan create` to build the package and publish it to your local cache
+4. Continue with the normal `conan install` process
+
+**Important:** The Git repository must have a tag matching the exact version specified in your requirements, using the `v<version>` format (e.g., `v1.2.3` for version `1.2.3`). If no matching tag exists, the build will fail. 
 
 ```bash
 cd [your-project]
