@@ -474,9 +474,9 @@ function(conan_create)
         file(REMOVE_RECURSE ${recipe_path})
     endif()
 
-    # Fetch the content from git
+    # Fetch the content from git (include tags so git describe works)
     execute_process(
-        COMMAND ${GIT_EXECUTABLE} clone --depth 1 --branch v${args_VERSION} --recurse-submodules ${args_GIT_REPOSITORY} ${recipe_path}
+        COMMAND ${GIT_EXECUTABLE} clone --depth 1 --branch v${args_VERSION} --recurse-submodules --tags ${args_GIT_REPOSITORY} ${recipe_path}
         RESULT_VARIABLE return_code
         OUTPUT_VARIABLE git_stdout
         ERROR_VARIABLE git_stderr
