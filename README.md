@@ -8,7 +8,7 @@ CMake dependency provider for the Conan C and C++ package manager.
 | ⚠️ Important: Conan 2 is the recommended production version for ``cmake-conan``.  | 
 |------------------------------------------|
 | The ``cmake-conan`` integration in this ``develop2`` branch for Conan 2 using CMake dependency providers, even if not released as 1.0 yet, is more stable, production-ready and recommended than the legacy ``cmake-conan`` for Conan 1. Please update to Conan 2 and the new ``cmake-conan`` integration in this ``develop2`` branch. |
-
+| From the 0.19.0 release, the tagged releases in this repo are Conan 2.X compatible. Feel free to use these releases instead of the ``develop2`` branch for stability, but recall that these versions are not considered stable, and things can break in future releases. |
 
 ## Quickstart with Conan 2.0
 
