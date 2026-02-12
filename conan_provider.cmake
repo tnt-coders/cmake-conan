@@ -660,6 +660,17 @@ function(conan_create)
             endif()
         endif()
 
+        # In case there was not a valid cmake executable in the PATH, we inject the
+        # same we used to invoke the provider to the PATH
+        if(DEFINED PATH_TO_CMAKE_BIN)
+            set(old_path $ENV{PATH})
+            if(CMAKE_HOST_WIN32)
+                set(ENV{PATH} "${PATH_TO_CMAKE_BIN};$ENV{PATH}")
+            else()
+                set(ENV{PATH} "${PATH_TO_CMAKE_BIN}:$ENV{PATH}")
+            endif()
+        endif()
+
         # Run conan create to create the package
         execute_process(
             COMMAND ${CONAN_COMMAND} create ${recipe_path} ${reference_args} ${args_CONAN_CREATE_ARGS}
@@ -668,6 +679,10 @@ function(conan_create)
             ERROR_VARIABLE conan_stderr
             ECHO_ERROR_VARIABLE    # show the text output regardless
             WORKING_DIRECTORY ${recipe_path})
+
+        if(DEFINED PATH_TO_CMAKE_BIN)
+            set(ENV{PATH} "${old_path}")
+        endif()
 
         if(NOT "${return_code}" STREQUAL "0")
             message(FATAL_ERROR "Conan create failed='${return_code}'")
@@ -687,7 +702,11 @@ function(conan_install)
     # same we used to invoke the provider to the PATH
     if(DEFINED PATH_TO_CMAKE_BIN)
         set(old_path $ENV{PATH})
-        set(ENV{PATH} "$ENV{PATH}:${PATH_TO_CMAKE_BIN}")
+        if(CMAKE_HOST_WIN32)
+            set(ENV{PATH} "${PATH_TO_CMAKE_BIN};$ENV{PATH}")
+        else()
+            set(ENV{PATH} "${PATH_TO_CMAKE_BIN}:$ENV{PATH}")
+        endif()
     endif()
 
     execute_process(COMMAND ${CONAN_COMMAND} install ${CMAKE_SOURCE_DIR} ${conan_args} ${ARGN} --format=json
