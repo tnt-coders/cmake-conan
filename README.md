@@ -4,8 +4,6 @@
 
 CMake dependency provider for the Conan C and C++ package manager.
 
-## Windows: Antivirus Exclusion for Conan Cache
-
 > [!IMPORTANT]
 > **On Windows, it is recommended to add the Conan cache directory to your antivirus exclusion list.**
 >
