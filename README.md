@@ -1,26 +1,39 @@
 # cmake-conan
 
-![Build Status](https://github.com/conan-io/cmake-conan/actions/workflows/cmake_conan.yml/badge.svg?branch=develop2)
+![Build Status](https://github.com/tnt-coders/cmake-conan/actions/workflows/cmake_conan.yml/badge.svg?branch=master)
 
 CMake dependency provider for the Conan C and C++ package manager.
 
+## Windows: Antivirus Exclusion for Conan Cache
 
-| ⚠️ Important: Conan 2 is the recommended production version for ``cmake-conan``.  | 
-|------------------------------------------|
-| The ``cmake-conan`` integration in this ``develop2`` branch for Conan 2 using CMake dependency providers, even if not released as 1.0 yet, is more stable, production-ready and recommended than the legacy ``cmake-conan`` for Conan 1. Please update to Conan 2 and the new ``cmake-conan`` integration in this ``develop2`` branch. |
+> [!IMPORTANT]
+> **On Windows, it is recommended to add the Conan cache directory to your antivirus exclusion list.**
+>
+> When cmake-conan runs during CMake configuration, Conan writes package files to its local cache. Windows Defender (and other real-time antivirus software) may scan these files as they are written, creating a race condition where Conan attempts to read the files before the scan completes. This causes intermittent `FileNotFoundError` failures during the export step of `conan create` or `conan install`.
+>
+> A common symptom is a build that **fails on the first run but succeeds on the second** without any changes.
+>
+> **To fix this, exclude the Conan cache directory from real-time scanning:**
+>
+> 1. Open **Windows Security** (search "Windows Security" in the Start menu)
+> 2. Go to **Virus & threat protection** > **Virus & threat protection settings** > **Manage settings**
+> 3. Scroll to **Exclusions** > **Add or remove exclusions**
+> 4. Click **Add an exclusion** > **Folder**
+> 5. Select your Conan cache directory (default: `C:\Users\<username>\.conan2\`)
+>
+> You can find your cache location by running `conan config home`.
 
-
-## Quickstart with Conan 2.0
+## Quickstart
 
 Prerequisites:
 * CMake 3.24
 * Conan 2.0.5
 * A CMake-based project that contains a `conanfile.txt` or `conanfile.py` to list the required dependencies.
 
-First, clone this repository in the `develop2` branch.
+First, clone this repository
 
 ```bash
-git clone https://github.com/conan-io/cmake-conan.git -b develop2
+git clone https://github.com/tnt-coders/cmake-conan.git
 ```
 
 ### Example project
