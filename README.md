@@ -1,6 +1,6 @@
 # cmake-conan
 
-![Build Status](https://github.com/tnt-coders/cmake-conan/actions/workflows/cmake_conan.yml/badge.svg?branch=master)
+[![Build](https://github.com/tnt-coders/cmake-conan/actions/workflows/cmake_conan.yml/badge.svg)](https://github.com/tnt-coders/cmake-conan/actions/workflows/cmake_conan.yml)
 
 CMake dependency provider for the Conan C and C++ package manager.
 
