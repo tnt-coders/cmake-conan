@@ -51,6 +51,8 @@ cmake --build build --config Release
 
 * When first invoking CMake to configure the project, pass `-DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=[path-to-cmake-conan]/conan_provider.cmake`. This will ensure that `conan install` is invoked from within CMake. This integration **does not require making any changes to your `CMakeLists.txt` scripts**.
 
+* Host profile detection is deferred until after compilers are configured, so the generated `conan_host_profile` is available even for projects that have no Conan dependencies (where `find_package()` is never called).
+
 ## Building package recipes from Git
 
 ***Package not found on conancenter or any configured remote? Not even in your local cache!? cmake-conan has you covered!***

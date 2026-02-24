@@ -797,7 +797,6 @@ endmacro()
 
 
 macro(conan_provide_dependency method package_name)
-    set_property(GLOBAL PROPERTY CONAN_PROVIDE_DEPENDENCY_INVOKED TRUE)
     get_property(_conan_install_success GLOBAL PROPERTY CONAN_INSTALL_SUCCESS)
     if(NOT _conan_install_success)
         find_program(CONAN_COMMAND "conan" REQUIRED)
@@ -809,6 +808,7 @@ macro(conan_provide_dependency method package_name)
         endif()
         if("auto-cmake" IN_LIST CONAN_HOST_PROFILE)
             detect_host_profile(${CMAKE_BINARY_DIR}/conan_host_profile)
+            set_property(GLOBAL PROPERTY CONAN_HOST_PROFILE_DETECTED TRUE)
         endif()
         construct_profile_argument(_host_profile_flags CONAN_HOST_PROFILE)
         construct_profile_argument(_build_profile_flags CONAN_BUILD_PROFILE)
@@ -1006,31 +1006,29 @@ cmake_language(
 )
 
 
-macro(conan_provide_dependency_check)
-    set(_conan_provide_dependency_invoked FALSE)
-    get_property(_conan_provide_dependency_invoked GLOBAL PROPERTY CONAN_PROVIDE_DEPENDENCY_INVOKED)
-    if(NOT _conan_provide_dependency_invoked)
-        message(WARNING "Conan is correctly configured as dependency provider, "
-                        "but Conan has not been invoked. Please add at least one "
-                        "call to `find_package()`.")
-        if(DEFINED CONAN_COMMAND)
-            # supress warning in case `CONAN_COMMAND` was specified but unused.
-            set(_conan_command ${CONAN_COMMAND})
-            unset(_conan_command)
-        endif()
+# Deferred fallback for host profile detection. When no find_package() calls occur
+# (e.g. projects with no Conan dependencies), conan_provide_dependency() is never
+# invoked and the host profile is never generated. This deferred call runs at the end
+# of top-level directory processing — after compilers are configured — and generates
+# the profile only if conan_provide_dependency() didn't already handle it.
+macro(_conan_deferred_detect_host_profile)
+    get_property(_already_detected GLOBAL PROPERTY CONAN_HOST_PROFILE_DETECTED)
+    if(NOT _already_detected)
+        detect_host_profile("${CMAKE_BINARY_DIR}/conan_host_profile")
     endif()
-    unset(_conan_provide_dependency_invoked)
+    unset(_already_detected)
 endmacro()
-
-
-# Add a deferred call at the end of processing the top-level directory
-# to check if the dependency provider was invoked at all.
-cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL conan_provide_dependency_check)
 
 # Configurable variables for Conan profiles
 set(CONAN_HOST_PROFILE "default;auto-cmake" CACHE STRING "Conan host profile")
 set(CONAN_BUILD_PROFILE "default" CACHE STRING "Conan build profile")
 set(CONAN_INSTALL_ARGS "--build=missing" CACHE STRING "Command line arguments for conan install")
+
+# Register the deferred host profile detection after CONAN_HOST_PROFILE is defined
+if("auto-cmake" IN_LIST CONAN_HOST_PROFILE)
+    cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}"
+        CALL _conan_deferred_detect_host_profile)
+endif()
 
 find_program(_cmake_program NAMES cmake NO_PACKAGE_ROOT_PATH NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH NO_CMAKE_SYSTEM_PATH NO_CMAKE_FIND_ROOT_PATH)
 if(NOT _cmake_program)
