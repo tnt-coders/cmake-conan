@@ -883,6 +883,7 @@ macro(conan_provide_dependency method package_name)
                         list(APPEND _recipes "${CMAKE_MATCH_2}")
                         set(_recipe_${CMAKE_MATCH_2}_ref "${CMAKE_MATCH_1}")
                         set(_recipe_${CMAKE_MATCH_2}_version "${CMAKE_MATCH_3}")
+                        string(STRIP "${_recipe_${CMAKE_MATCH_2}_version}" _recipe_${CMAKE_MATCH_2}_version)
                         # skip CMAKE_MATCH_4 since it is the entire @user/channel grouped
                         set(_recipe_${CMAKE_MATCH_2}_user "${CMAKE_MATCH_5}")
                         # skipe CMAKE_MATCH_6 since it is the entire /channel with the slash
