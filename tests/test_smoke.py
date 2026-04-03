@@ -421,7 +421,7 @@ class TestGeneratedProfile:
         run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release", check=True)
         out, err = capfd.readouterr()
         assert "The CXX compiler identification is GNU" in out
-        assert "CMake-Conan: The C compiler is not defined." in err
+        assert "CMake-Conan: Neither the C nor C++ compiler is defined." not in err
         assert 'tools.build:compiler_executables={"cpp":"/usr/bin/c++"}' in out
 
     @linux
@@ -431,7 +431,7 @@ class TestGeneratedProfile:
         run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=/usr/bin/cc", check=True)
         out, err = capfd.readouterr()
         assert "The CXX compiler identification is GNU" in out
-        assert "The C compiler is not defined." not in err
+        assert "CMake-Conan: Neither the C nor C++ compiler is defined." not in err
         assert 'tools.build:compiler_executables={"c":"/usr/bin/cc","cpp":"/usr/bin/c++"}' in out
 
     @linux
@@ -441,7 +441,7 @@ class TestGeneratedProfile:
         run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_BUILD_TYPE=Release", check=True)
         out, err = capfd.readouterr()
         assert "The CXX compiler identification is Clang" in out
-        assert "The C compiler is not defined." not in err
+        assert "CMake-Conan: Neither the C nor C++ compiler is defined." not in err
         assert 'tools.build:compiler_executables={"c":"/usr/bin/clang","cpp":"/usr/bin/clang++"}' in out
 
     @darwin
