@@ -75,6 +75,10 @@ mypackage/1.2.3  #recipe: https://github.com/user/mypackage.git
 private/2.0.0@myuser/stable  #recipe: https://github.com/org/private.git
 ```
 
+Annotated dependencies are resolved recursively. If a recipe created from Git declares its own `#recipe:`-annotated requirements, cmake-conan will create those transitive dependencies first before running `conan create` for the parent package.
+
+The recipe URL can point to any Git clone target that ends in `.git`, including `https://`, SSH, or local `file://` URLs.
+
 When cmake-conan encounters a package with a `#recipe:` annotation, it performs the following checks:
 
 1. **Remote check:** If the package exists on a configured Conan remote, it is used directly (no build required).

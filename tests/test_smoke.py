@@ -4,6 +4,7 @@ import platform
 import re
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,72 @@ windows = pytest.mark.skipif(platform.system() != "Windows", reason="Windows onl
 
 def run(cmd, check=True):
     subprocess.run(cmd, shell=True, check=check)
+
+
+def run_capture(cmd, cwd=None, check=True):
+    return subprocess.run(cmd, cwd=cwd, check=check, capture_output=True, text=True)
+
+
+def write_text(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(textwrap.dedent(content).lstrip(), encoding="utf-8")
+
+
+def init_git_repo(repo_dir):
+    run_capture(["git", "init", "--initial-branch=main"], cwd=repo_dir)
+    run_capture(["git", "config", "user.name", "Test User"], cwd=repo_dir)
+    run_capture(["git", "config", "user.email", "test@example.com"], cwd=repo_dir)
+    commit_git_repo(repo_dir)
+    run_capture(["git", "tag", "v0.1"], cwd=repo_dir)
+
+
+def commit_git_repo(repo_dir, message="Initial commit"):
+    run_capture(["git", "add", "."], cwd=repo_dir)
+    run_capture(["git", "commit", "-m", message], cwd=repo_dir)
+
+
+def create_header_only_recipe_repo(repo_dir, name, header_body, requires_line="", cpp_requires=""):
+    requirements_body = requires_line if requires_line else "pass"
+    package_info_lines = [
+        "        self.cpp_info.bindirs = []",
+        "        self.cpp_info.libdirs = []",
+    ]
+    if cpp_requires:
+        package_info_lines.append(f'        self.cpp_info.requires = ["{cpp_requires}"]')
+    package_info_lines.extend([
+        f'        self.cpp_info.set_property("cmake_file_name", "{name}")',
+        f'        self.cpp_info.set_property("cmake_target_name", "{name}::{name}")',
+    ])
+    conanfile_content = "\n".join([
+        "import os",
+        "from conan import ConanFile",
+        "from conan.tools.files import copy",
+        "",
+        "",
+        f"class {name.title().replace('-', '')}Conan(ConanFile):",
+        f'    name = "{name}"',
+        '    version = "0.1"',
+        '    package_type = "header-library"',
+        '    exports_sources = "include/*"',
+        '    no_copy_source = True',
+        '    settings = "os", "arch", "compiler", "build_type"',
+        "",
+        "    def requirements(self):",
+        f"        {requirements_body}",
+        "",
+        "    def package(self):",
+        '        copy(self, "*.hpp", os.path.join(self.source_folder, "include"), os.path.join(self.package_folder, "include"))',
+        "",
+        "    def package_info(self):",
+        *package_info_lines,
+        "",
+    ])
+    write_text(
+        repo_dir / "conanfile.py",
+        conanfile_content,
+    )
+    write_text(repo_dir / "include" / name / f"{name}.hpp", header_body)
+    init_git_repo(repo_dir)
 
 def clear_folder_contents(folder_path):
     if not os.path.isdir(folder_path):
@@ -769,6 +836,143 @@ class TestCMakeDepsGenerators:
         run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release', check=False)
         _, err = capfd.readouterr()
         assert 'Cmake-conan: CMakeDeps generator was not defined in the conanfile' in err
+
+
+class TestRecipeAnnotations:
+    def test_transitive_recipe_annotations_are_created_recursively(self, capfd, tmp_path, monkeypatch):
+        child_repo = tmp_path / "child"
+        create_header_only_recipe_repo(
+            child_repo,
+            "child",
+            """
+            #pragma once
+
+            inline int child_value() { return 7; }
+            """,
+        )
+
+        child_repo_uri = (child_repo / ".git").resolve().as_uri()
+        parent_repo = tmp_path / "parent"
+        create_header_only_recipe_repo(
+            parent_repo,
+            "parent",
+            """
+            #pragma once
+            #include <child/child.hpp>
+
+            inline int parent_value() { return child_value(); }
+            """,
+            requires_line=f'self.requires("child/0.1")  #recipe: {child_repo_uri}',
+            cpp_requires="child::child",
+        )
+
+        workdir = tmp_path / "recursive_recipe_test"
+        workdir.mkdir()
+        source_dir = workdir / "src"
+        binary_dir = workdir / "build"
+        source_dir.mkdir()
+        binary_dir.mkdir()
+        monkeypatch.chdir(binary_dir)
+
+        parent_repo_uri = (parent_repo / ".git").resolve().as_uri()
+        write_text(
+            source_dir / "conanfile.txt",
+            f"""
+            [requires]
+            parent/0.1  #recipe: {parent_repo_uri}
+
+            [generators]
+            CMakeDeps
+            """,
+        )
+        write_text(
+            source_dir / "CMakeLists.txt",
+            """
+            cmake_minimum_required(VERSION 3.24)
+            project(RecursiveRecipeAnnotations CXX)
+
+            set(CMAKE_CXX_STANDARD 17)
+            find_package(parent REQUIRED)
+            add_executable(app main.cpp)
+            target_link_libraries(app PRIVATE parent::parent)
+            """,
+        )
+        write_text(
+            source_dir / "main.cpp",
+            """
+            #include <parent/parent.hpp>
+
+            int main()
+            {
+                return parent_value() == 7 ? 0 : 1;
+            }
+            """,
+        )
+
+        run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release")
+        out, _ = capfd.readouterr()
+        assert f"Found recipe for parent/0.1: {parent_repo_uri}" in out
+        assert f"Found transitive recipe for child/0.1: {child_repo_uri}" in out
+        run("cmake --build .")
+
+    def test_recipe_annotations_accept_file_git_urls(self, capfd, tmp_path, monkeypatch):
+        repo_dir = tmp_path / "standalone"
+        create_header_only_recipe_repo(
+            repo_dir,
+            "standalone",
+            """
+            #pragma once
+
+            inline int standalone_value() { return 0; }
+            """,
+        )
+
+        workdir = tmp_path / "file_url_recipe_test"
+        workdir.mkdir()
+        source_dir = workdir / "src"
+        binary_dir = workdir / "build"
+        source_dir.mkdir()
+        binary_dir.mkdir()
+        monkeypatch.chdir(binary_dir)
+
+        repo_uri = (repo_dir / ".git").resolve().as_uri()
+        write_text(
+            source_dir / "conanfile.txt",
+            f"""
+            [requires]
+            standalone/0.1  #recipe: {repo_uri}
+
+            [generators]
+            CMakeDeps
+            """,
+        )
+        write_text(
+            source_dir / "CMakeLists.txt",
+            """
+            cmake_minimum_required(VERSION 3.24)
+            project(FileUrlRecipe CXX)
+
+            set(CMAKE_CXX_STANDARD 17)
+            find_package(standalone REQUIRED)
+            add_executable(app main.cpp)
+            target_link_libraries(app PRIVATE standalone::standalone)
+            """,
+        )
+        write_text(
+            source_dir / "main.cpp",
+            """
+            #include <standalone/standalone.hpp>
+
+            int main()
+            {
+                return standalone_value();
+            }
+            """,
+        )
+
+        run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release")
+        out, _ = capfd.readouterr()
+        assert f"Found recipe for standalone/0.1: {repo_uri}" in out
 
 
 class TestTryCompile:
