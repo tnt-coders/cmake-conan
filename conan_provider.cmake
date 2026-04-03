@@ -35,7 +35,10 @@ set(CONAN_MINIMUM_VERSION 2.0.5)
 cmake_policy(PUSH)
 cmake_minimum_required(VERSION 3.24)
 
-# Required to create dependencies from recipe
+# Git is needed for cloning package recipes from source and querying remote refs.
+# BYPASS_PROVIDER prevents infinite recursion: since this file IS the dependency
+# provider, any find_package() call within it would otherwise call back into itself.
+# This populates the GIT_EXECUTABLE variable used throughout this file.
 find_package(Git REQUIRED BYPASS_PROVIDER)
 
 function(detect_os os os_api_level os_sdk os_subsystem os_version)
@@ -336,6 +339,10 @@ macro(append_compiler_executables_configuration)
     set(_conan_cpp_compiler "")
     set(_conan_rc_compiler "")
     set(_conan_compilers_list "")
+    # Track whether at least one of C or C++ is configured. A project may legitimately
+    # enable only one language (e.g. a C++-only project won't define CMAKE_C_COMPILER),
+    # so we warn only when *neither* compiler is present rather than warning for each
+    # missing compiler individually as the upstream code did.
     set(_conan_has_primary_compiler FALSE)
     if(CMAKE_C_COMPILER)
         set(_conan_c_compiler "\"c\":\"${CMAKE_C_COMPILER}\"")
@@ -465,7 +472,19 @@ function(conan_profile_detect_default)
 endfunction()
 
 
-# Function to check if a conan package exists in the local cache or in any known remote
+# Check whether a Conan package exists in the local cache and/or in any configured remote.
+#
+# package_ref      - Conan package reference to search for (e.g. "mylib/1.0.0")
+# cache_found_var  - output variable set to TRUE if the package exists in the local cache
+# remote_found_var - output variable set to TRUE if the package exists in any known remote
+#
+# The two lookups are kept separate because we treat remote-published packages as stable
+# (trustworthy, won't be rebuilt) while cache-only packages may be stale and need
+# additional checks (see conan_create()).
+#
+# NOTE: "conan list" returns exit code 0 even when a package is not found; it only
+# prints an "ERROR: not found" message. We therefore check both the exit code AND
+# the output text to determine whether the package actually exists.
 function(conan_package_exists package_ref cache_found_var remote_found_var)
     # Check local cache first
     execute_process(
@@ -483,7 +502,7 @@ function(conan_package_exists package_ref cache_found_var remote_found_var)
         set(${cache_found_var} FALSE PARENT_SCOPE)
     endif()
 
-    # If not in cache, check all known remotes
+    # Check all known remotes (-r=* means "all configured remotes")
     execute_process(
         COMMAND conan list ${package_ref} -r=*
         RESULT_VARIABLE result
@@ -501,6 +520,16 @@ function(conan_package_exists package_ref cache_found_var remote_found_var)
 endfunction()
 
 
+# Convert a Conan version string to the corresponding Git ref (tag or branch name).
+#
+# Conan versions are plain numbers like "1.2.3", but git tags commonly use the
+# "v" prefix (e.g. "v1.2.3"). This function prepends "v" when the version starts
+# with a digit so that git clone/ls-remote can find the tag. Version strings that
+# already start with a letter (e.g. "main" or "dev") are passed through unchanged,
+# allowing branch names to be used as versions as well.
+#
+# version - input Conan version string (e.g. "1.2.3" or "main")
+# git_ref - output variable set to the derived git ref (e.g. "v1.2.3" or "main")
 function(derive_git_ref version git_ref)
     set(_git_ref "${version}")
     if(_git_ref MATCHES "^[0-9]")
@@ -510,13 +539,49 @@ function(derive_git_ref version git_ref)
 endfunction()
 
 
+# Parse a conanfile (conanfile.py or conanfile.txt) looking for inline "recipe:"
+# annotations that tell cmake-conan where to fetch a package's recipe source from git.
+#
+# This enables building packages from source when they are not available on any
+# configured Conan remote. To annotate a requirement, add a comment on the same
+# line as the requirement in the following format:
+#
+#   conanfile.py:   self.requires("mypkg/1.0.0")          # recipe: https://github.com/org/mypkg.git
+#   conanfile.txt:  mypkg/1.0.0                            # recipe: https://github.com/org/mypkg.git
+#
+# For each annotated requirement, this function:
+#   - Appends the package name to the list in ${recipes_out}
+#   - Sets the following variables in the PARENT_SCOPE (keyed by package name):
+#       _recipe_<name>_ref      full Conan reference  (e.g. "mypkg/1.0.0@user/channel")
+#       _recipe_<name>_version  version string        (e.g. "1.0.0")
+#       _recipe_<name>_user     optional user field   (e.g. "myorg"), empty if absent
+#       _recipe_<name>_channel  optional channel      (e.g. "stable"), empty if absent
+#       _recipe_<name>_repo     git repository URL    (e.g. "https://github.com/org/mypkg.git")
+#
+# conanfile_path - absolute path to the conanfile to parse
+# recipes_out    - output variable that will receive the list of package names found
 function(parse_recipe_annotations conanfile_path recipes_out)
     set(_recipes)
     file(READ "${conanfile_path}" _conanfile_contents)
 
     if("${conanfile_path}" MATCHES "conanfile[.]py$")
+        # Collect every line that contains a self.requires() call (lines starting with
+        # '#' are excluded by [^\n#]* so already-commented-out lines are ignored).
         string(REGEX MATCHALL "[^\n#]*self[.]requires[^\n]*" _recipe_matches "${_conanfile_contents}")
         foreach(_recipe_match IN LISTS _recipe_matches)
+            # Match self.requires("name/version@user/channel")  # recipe: <url>.git
+            #
+            # Sorry this is so ugly... CMake has limited regex support
+            #
+            # Capture group breakdown:
+            #   MATCH_1 = full Conan ref, e.g. "mypkg/1.0.0@myorg/stable"
+            #   MATCH_2 = package name,   e.g. "mypkg"
+            #   MATCH_3 = version,        e.g. "1.0.0"
+            #   MATCH_4 = @user/channel   e.g. "@myorg/stable" (optional)
+            #   MATCH_5 = user,           e.g. "myorg"   (empty if no @user/channel)
+            #   MATCH_6 = /channel,       e.g. "/stable" (optional)
+            #   MATCH_7 = channel,        e.g. "stable"  (empty if no /channel)
+            #   MATCH_8 = git repo URL,   e.g. "https://github.com/org/mypkg.git"
             string(
                 REGEX MATCH
                 "self[.]requires[(]\"(([^/]+)/([^@]+)([@]([^/\"]+)(/([^\"]+))?[^\"]*)?)\"[)].*[#].*recipe:[ \t]*(([^ \t]+)[.]git)"
@@ -525,23 +590,30 @@ function(parse_recipe_annotations conanfile_path recipes_out)
             )
 
             if(_recipe_found)
-                list(APPEND _recipes "${CMAKE_MATCH_2}")
-                set(_recipe_${CMAKE_MATCH_2}_ref "${CMAKE_MATCH_1}" PARENT_SCOPE)
+                string(STRIP "${CMAKE_MATCH_1}" _recipe_ref)
+                string(STRIP "${CMAKE_MATCH_2}" _recipe_name)
+                list(APPEND _recipes "${_recipe_name}")
+                set(_recipe_${_recipe_name}_ref "${_recipe_ref}" PARENT_SCOPE)
                 string(STRIP "${CMAKE_MATCH_3}" _recipe_version)
-                set(_recipe_${CMAKE_MATCH_2}_version "${_recipe_version}" PARENT_SCOPE)
+                set(_recipe_${_recipe_name}_version "${_recipe_version}" PARENT_SCOPE)
                 string(STRIP "${CMAKE_MATCH_5}" _recipe_user)
-                set(_recipe_${CMAKE_MATCH_2}_user "${_recipe_user}" PARENT_SCOPE)
+                set(_recipe_${_recipe_name}_user "${_recipe_user}" PARENT_SCOPE)
                 string(STRIP "${CMAKE_MATCH_7}" _recipe_channel)
-                set(_recipe_${CMAKE_MATCH_2}_channel "${_recipe_channel}" PARENT_SCOPE)
+                set(_recipe_${_recipe_name}_channel "${_recipe_channel}" PARENT_SCOPE)
                 string(STRIP "${CMAKE_MATCH_8}" _recipe_repo)
-                set(_recipe_${CMAKE_MATCH_2}_repo "${_recipe_repo}" PARENT_SCOPE)
+                set(_recipe_${_recipe_name}_repo "${_recipe_repo}" PARENT_SCOPE)
             endif()
         endforeach()
     elseif("${conanfile_path}" MATCHES "conanfile[.]txt$")
+        # Extract everything between "[requires]" and the next "[" section header.
+        # The regex captures all text after the [requires] line up to (but not
+        # including) the next "[" (which would be the start of another section).
         string(REGEX MATCH "\\[requires\\][^\n]*\n([^[]*)" _requires_section "${_conanfile_contents}")
 
         if(_requires_section)
             set(_requires_content "${CMAKE_MATCH_1}")
+            # Split on newlines (handle both Unix LF and Windows CRLF) to get
+            # individual requirement lines, then process each one.
             string(REGEX REPLACE "\r?\n" ";" _requirement_lines "${_requires_content}")
             foreach(_requirement_line IN LISTS _requirement_lines)
                 string(STRIP "${_requirement_line}" _requirement_line_stripped)
@@ -549,6 +621,19 @@ function(parse_recipe_annotations conanfile_path recipes_out)
                     continue()
                 endif()
 
+                # Match  name/version@user/channel  # recipe: <url>.git
+                #
+                # Sorry this is so ugly... CMake has limited regex support
+                #
+                # Capture group breakdown:
+                #   MATCH_1 = full Conan ref, e.g. "mypkg/1.0.0@myorg/stable"
+                #   MATCH_2 = package name,   e.g. "mypkg"
+                #   MATCH_3 = version,        e.g. "1.0.0"
+                #   MATCH_4 = @user/channel   e.g. "@myorg/stable" (optional)
+                #   MATCH_5 = user,           e.g. "myorg"   (empty if no @user/channel)
+                #   MATCH_6 = /channel,       e.g. "/stable" (optional)
+                #   MATCH_7 = channel,        e.g. "stable"  (empty if no /channel)
+                #   MATCH_8 = git repo URL,   e.g. "https://github.com/org/mypkg.git"
                 string(
                     REGEX MATCH
                     "(([^/#@]+)/([^@]+)([@]([^/#]+)(/([^#]+))?)?).*[#].*recipe:[ \t]*(([^ \t]+)[.]git)"
@@ -557,17 +642,18 @@ function(parse_recipe_annotations conanfile_path recipes_out)
                 )
 
                 if(_recipe_found)
-                    list(APPEND _recipes "${CMAKE_MATCH_2}")
                     string(STRIP "${CMAKE_MATCH_1}" _recipe_ref)
-                    set(_recipe_${CMAKE_MATCH_2}_ref "${_recipe_ref}" PARENT_SCOPE)
+                    string(STRIP "${CMAKE_MATCH_2}" _recipe_name)
+                    list(APPEND _recipes "${_recipe_name}")
+                    set(_recipe_${_recipe_name}_ref "${_recipe_ref}" PARENT_SCOPE)
                     string(STRIP "${CMAKE_MATCH_3}" _recipe_version)
-                    set(_recipe_${CMAKE_MATCH_2}_version "${_recipe_version}" PARENT_SCOPE)
+                    set(_recipe_${_recipe_name}_version "${_recipe_version}" PARENT_SCOPE)
                     string(STRIP "${CMAKE_MATCH_5}" _recipe_user)
-                    set(_recipe_${CMAKE_MATCH_2}_user "${_recipe_user}" PARENT_SCOPE)
+                    set(_recipe_${_recipe_name}_user "${_recipe_user}" PARENT_SCOPE)
                     string(STRIP "${CMAKE_MATCH_7}" _recipe_channel)
-                    set(_recipe_${CMAKE_MATCH_2}_channel "${_recipe_channel}" PARENT_SCOPE)
+                    set(_recipe_${_recipe_name}_channel "${_recipe_channel}" PARENT_SCOPE)
                     string(STRIP "${CMAKE_MATCH_8}" _recipe_repo)
-                    set(_recipe_${CMAKE_MATCH_2}_repo "${_recipe_repo}" PARENT_SCOPE)
+                    set(_recipe_${_recipe_name}_repo "${_recipe_repo}" PARENT_SCOPE)
                 endif()
             endforeach()
         endif()
@@ -577,27 +663,49 @@ function(parse_recipe_annotations conanfile_path recipes_out)
 endfunction()
 
 
+# Create a Conan package from source by cloning its recipe from git and running
+# "conan create". This is the fallback path when a package is not available on any
+# configured Conan remote and a "# recipe: <url>.git" annotation is present.
+#
+# Stability model (mirrors how packages are typically versioned in practice):
+#   - Remote-published packages are treated as stable and will never be rebuilt.
+#   - Cache packages tied to a git *tag* are also treated as stable (won't rebuild).
+#   - Cache packages tied to a git *branch* are unstable: we compare the local clone's
+#     commit hash against the remote to detect if the branch has moved, and rebuild if so.
+#
+# Transitive recipes: if the cloned recipe itself contains "# recipe:" annotations,
+# those dependencies are created first (recursively) before running "conan create".
+#
+# Parameters:
+#   NAME             package name           (e.g. "mypkg")
+#   VERSION          package version        (e.g. "1.0.0")
+#   USER             optional Conan user    (e.g. "myorg")
+#   CHANNEL          optional Conan channel (e.g. "stable")
+#   CONAN_REF        full Conan reference   (e.g. "mypkg/1.0.0@myorg/stable")
+#   GIT_REPOSITORY   URL of the git repo containing the recipe
+#   GIT_REF          git tag or branch name to check out
+#   CONAN_CREATE_ARGS  extra arguments forwarded verbatim to "conan create"
 function(conan_create)
     set(options)
     set(one_value_args NAME VERSION USER CHANNEL CONAN_REF GIT_REPOSITORY GIT_REF)
     set(multi_value_args CONAN_CREATE_ARGS)
     cmake_parse_arguments(args "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
-    foreach(_arg IN ITEMS NAME VERSION USER CHANNEL CONAN_REF GIT_REPOSITORY GIT_REF)
-        if(DEFINED args_${_arg})
-            string(STRIP "${args_${_arg}}" args_${_arg})
-        endif()
-    endforeach()
-
+    # CONAN_CREATED_RECIPES tracks packages that have already been fully created in
+    # this configure run. Skip immediately if this ref was already handled (prevents
+    # redundant work when the same package is a transitive dependency of multiple recipes).
     get_property(_conan_created_recipes GLOBAL PROPERTY CONAN_CREATED_RECIPES)
     if("${args_CONAN_REF}" IN_LIST _conan_created_recipes)
         return()
     endif()
 
+    # CONAN_CREATING_RECIPES tracks packages that are currently being created further
+    # up the call stack. Seeing the same ref here means a cycle: A requires B requires A.
     get_property(_conan_creating_recipes GLOBAL PROPERTY CONAN_CREATING_RECIPES)
     if("${args_CONAN_REF}" IN_LIST _conan_creating_recipes)
         message(FATAL_ERROR "CMake-Conan: Circular #recipe dependency detected while creating \"${args_CONAN_REF}\"")
     endif()
+    # Mark this ref as "in-progress" before recursing into transitive dependencies.
     set_property(GLOBAL APPEND PROPERTY CONAN_CREATING_RECIPES "${args_CONAN_REF}")
 
     set(recipe_path ${CMAKE_BINARY_DIR}/conan/_recipes/${args_NAME})
@@ -789,6 +897,9 @@ function(conan_create)
 
         # Run conan create to create the package
         set(_conan_create_args ${args_CONAN_CREATE_ARGS})
+        # --test-folder= (empty value) disables the test_package step that conan create
+        # normally runs after building. We only need the package in the cache, not to
+        # verify it, so skipping the test saves build time.
         list(APPEND _conan_create_args --test-folder=)
 
         execute_process(
@@ -808,6 +919,9 @@ function(conan_create)
         endif()
     endif()
 
+    # Pop this ref off the in-progress stack now that it's fully built (or skipped).
+    # Adding it to CONAN_CREATED_RECIPES ensures we won't attempt it again if another
+    # recipe also lists it as a transitive dependency.
     get_property(_conan_creating_recipes GLOBAL PROPERTY CONAN_CREATING_RECIPES)
     list(REMOVE_ITEM _conan_creating_recipes "${args_CONAN_REF}")
     set_property(GLOBAL PROPERTY CONAN_CREATING_RECIPES "${_conan_creating_recipes}")
@@ -932,6 +1046,9 @@ macro(conan_provide_dependency method package_name)
         endif()
         if("auto-cmake" IN_LIST CONAN_HOST_PROFILE)
             detect_host_profile(${CMAKE_BINARY_DIR}/conan_host_profile)
+            # Flag that the host profile has already been generated so that the
+            # deferred fallback (_conan_deferred_detect_host_profile) doesn't run it
+            # a second time at the end of top-level directory processing.
             set_property(GLOBAL PROPERTY CONAN_HOST_PROFILE_DETECTED TRUE)
         endif()
         construct_profile_argument(_host_profile_flags CONAN_HOST_PROFILE)
@@ -961,13 +1078,16 @@ macro(conan_provide_dependency method package_name)
         endif()
 
         get_property(_multiconfig_generator GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+        # conan create requires a single build type. For single-config generators use
+        # CMAKE_BUILD_TYPE directly. For multiconfig generators (e.g. Visual Studio, Xcode)
+        # CMAKE_BUILD_TYPE is empty at configure time, so fall back to Release.
         set(_create_build_type "${CMAKE_BUILD_TYPE}")
         if(_multiconfig_generator OR NOT _create_build_type)
             set(_create_build_type "Release")
         endif()
 
-        # Check remotes and cache for packages that can be recreated from git
-        # Use the active single-config build type; fall back to Release for multiconfig generators.
+        # For each annotated requirement, ensure the package exists in the cache or a remote.
+        # If it doesn't, build it from source using conan_create().
         foreach(_recipe IN LISTS _recipes)
             message(STATUS "CMake-Conan: Found recipe for ${_recipe_${_recipe}_ref}: ${_recipe_${_recipe}_repo}")
             derive_git_ref("${_recipe_${_recipe}_version}" _git_ref)
