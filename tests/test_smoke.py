@@ -68,7 +68,7 @@ def create_git_branch(repo_dir, branch_name, message=None):
     run_capture(["git", "checkout", "main"], cwd=repo_dir)
 
 
-def create_header_only_recipe_repo(repo_dir, name, header_body, requires_line="", cpp_requires=""):
+def create_header_only_recipe_repo(repo_dir, name, header_body, requires_line="", cpp_requires="", version="0.1"):
     requirements_body = requires_line if requires_line else "pass"
     package_info_lines = [
         "        self.cpp_info.bindirs = []",
@@ -88,7 +88,7 @@ def create_header_only_recipe_repo(repo_dir, name, header_body, requires_line=""
         "",
         f"class {name.title().replace('-', '')}Conan(ConanFile):",
         f'    name = "{name}"',
-        '    version = "0.1"',
+        f'    version = "{version}"',
         '    package_type = "header-library"',
         '    exports_sources = "include/*"',
         '    no_copy_source = True',
@@ -857,6 +857,7 @@ class TestRecipeAnnotations:
 
             inline int branch_recipe_value() { return 0; }
             """,
+            version="test",
         )
         create_git_branch(repo_dir, "test", message="Add test branch marker")
 
