@@ -765,9 +765,11 @@ function(conan_create)
             # If the recipe was recently generated locally, check if the git branch has been updated on the remote
             if(EXISTS ${recipe_path})
 
-                # Get local commit hash for the branch/tag
+                # Use the checked-out recipe HEAD instead of assuming a local branch ref exists.
+                # Clones created with --branch can still end up without a resolvable local ref
+                # name, especially for non-version branch names such as "test".
                 execute_process(
-                    COMMAND ${GIT_EXECUTABLE} rev-parse ${args_GIT_REF}
+                    COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
                     RESULT_VARIABLE return_code
                     OUTPUT_VARIABLE git_local_hash
                     ERROR_VARIABLE git_stderr
@@ -776,12 +778,13 @@ function(conan_create)
                     OUTPUT_STRIP_TRAILING_WHITESPACE)
 
                 if(NOT "${return_code}" STREQUAL "0" OR NOT git_local_hash)
-                    message(FATAL_ERROR "CMake-Conan: Failed to establish local Git hash for \"${args_GIT_REF}\" in ${recipe_path}")
+                    message(FATAL_ERROR "CMake-Conan: Failed to establish local Git hash from HEAD "
+                                        "for branch \"${args_GIT_REF}\" in ${recipe_path}")
                 endif()
 
-                # Get remote commit hash for the same branch/tag
+                # Get remote commit hash for the same branch
                 execute_process(
-                    COMMAND git ls-remote ${args_GIT_REPOSITORY} ${args_GIT_REF}
+                    COMMAND git ls-remote --heads ${args_GIT_REPOSITORY} ${args_GIT_REF}
                     RESULT_VARIABLE return_code
                     OUTPUT_VARIABLE git_remote_output
                     ERROR_VARIABLE git_stderr
@@ -793,7 +796,8 @@ function(conan_create)
                 string(REGEX MATCH "^[0-9a-fA-F]+" git_remote_hash "${git_remote_output}")
 
                 if(NOT "${return_code}" STREQUAL "0" OR NOT git_remote_hash)
-                    message(FATAL_ERROR "CMake-Conan: Failed to establish remote Git hash for \"${args_GIT_REF}\" in ${args_GIT_REPOSITORY}")
+                    message(FATAL_ERROR "CMake-Conan: Failed to establish remote Git hash for branch "
+                                        "\"${args_GIT_REF}\" in ${args_GIT_REPOSITORY}")
                 endif()
 
                 # Compare hashes

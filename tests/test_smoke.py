@@ -60,6 +60,14 @@ def commit_git_repo(repo_dir, message="Initial commit"):
     run_capture(["git", "commit", "-m", message], cwd=repo_dir)
 
 
+def create_git_branch(repo_dir, branch_name, message=None):
+    run_capture(["git", "checkout", "-b", branch_name], cwd=repo_dir)
+    if message is not None:
+        write_text(repo_dir / ".branch-marker", f"{branch_name}\n")
+        commit_git_repo(repo_dir, message=message)
+    run_capture(["git", "checkout", "main"], cwd=repo_dir)
+
+
 def create_header_only_recipe_repo(repo_dir, name, header_body, requires_line="", cpp_requires=""):
     requirements_body = requires_line if requires_line else "pass"
     package_info_lines = [
@@ -839,6 +847,72 @@ class TestCMakeDepsGenerators:
 
 
 class TestRecipeAnnotations:
+    def test_branch_recipe_annotations_reconfigure_without_local_branch_ref(self, capfd, tmp_path, monkeypatch):
+        repo_dir = tmp_path / "branch_recipe"
+        create_header_only_recipe_repo(
+            repo_dir,
+            "branchrecipe",
+            """
+            #pragma once
+
+            inline int branch_recipe_value() { return 0; }
+            """,
+        )
+        create_git_branch(repo_dir, "test", message="Add test branch marker")
+
+        workdir = tmp_path / "branch_recipe_test"
+        workdir.mkdir()
+        source_dir = workdir / "src"
+        binary_dir = workdir / "build"
+        source_dir.mkdir()
+        binary_dir.mkdir()
+        monkeypatch.chdir(binary_dir)
+
+        repo_uri = (repo_dir / ".git").resolve().as_uri()
+        write_text(
+            source_dir / "conanfile.txt",
+            f"""
+            [requires]
+            branchrecipe/test  #recipe: {repo_uri}
+
+            [generators]
+            CMakeDeps
+            """,
+        )
+        write_text(
+            source_dir / "CMakeLists.txt",
+            """
+            cmake_minimum_required(VERSION 3.24)
+            project(BranchRecipeRef CXX)
+
+            set(CMAKE_CXX_STANDARD 17)
+            find_package(branchrecipe REQUIRED)
+            add_executable(app main.cpp)
+            target_link_libraries(app PRIVATE branchrecipe::branchrecipe)
+            """,
+        )
+        write_text(
+            source_dir / "main.cpp",
+            """
+            #include <branchrecipe/branchrecipe.hpp>
+
+            int main()
+            {
+                return branch_recipe_value();
+            }
+            """,
+        )
+
+        run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release")
+        out, _ = capfd.readouterr()
+        assert f"Found recipe for branchrecipe/test: {repo_uri}" in out
+
+        run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release")
+        out, err = capfd.readouterr()
+        assert 'Failed to establish local Git hash for "test"' not in err
+        assert 'ambiguous argument \'test\'' not in err
+        assert 'Previously built recipe for "branchrecipe/test" is up to date.' in out
+
     def test_transitive_recipe_annotations_are_created_recursively(self, capfd, tmp_path, monkeypatch):
         child_repo = tmp_path / "child"
         create_header_only_recipe_repo(
