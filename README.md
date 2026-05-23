@@ -53,6 +53,80 @@ cmake --build build --config Release
 
 * Host profile detection is deferred until after compilers are configured, so the generated `conan_host_profile` is available even for projects that have no Conan dependencies (where `find_package()` is never called).
 
+## Using a local recipes index
+
+If a project contains a top-level `conan-recipes/` checkout, cmake-conan can consume recipes from
+it automatically before running `conan install`. The intended shared checkout for TNT Coders
+projects is [`tnt-coders/conan-recipes`](https://github.com/tnt-coders/conan-recipes), but any
+checkout with Conan's `local-recipes-index` layout works. That layout is the same high-level shape
+used by ConanCenter:
+
+```text
+my-project/
+  CMakePresets.json
+  conanfile.txt
+  conan-recipes/
+    recipes/
+      libebur128/
+        config.yml
+        all/
+          conanfile.py
+          conandata.yml
+          test_package/
+```
+
+With that directory present, no extra `CMAKE_PROJECT_TOP_LEVEL_INCLUDES` wrapper is needed. Continue
+pointing CMake at `conan_provider.cmake` as usual. On the first dependency resolution,
+cmake-conan registers `${CMAKE_SOURCE_DIR}/conan-recipes` as a recipes-only
+`local-recipes-index` remote, then proceeds with the normal `#recipe:` handling and
+`conan install` flow.
+
+For a project that uses Git submodules, add the shared recipes checkout at the repository root:
+
+```bash
+git submodule add https://github.com/tnt-coders/conan-recipes.git conan-recipes
+```
+
+For a regular checkout, clone it to the same top-level path:
+
+```bash
+git clone https://github.com/tnt-coders/conan-recipes.git conan-recipes
+```
+
+For example, a project can declare an unpublished recipe normally:
+
+```ini
+[requires]
+libebur128/1.2.6
+
+[generators]
+CMakeDeps
+```
+
+If the matching binary package is already in the active Conan cache, Conan reuses it. If it is
+missing and `CONAN_INSTALL_ARGS` includes `--build=missing`, Conan builds the binary from the local
+recipe and stores it in the same cache used by the rest of the dependency graph.
+
+cmake-conan restricts the local recipes remote to package folders that contain `config.yml`. For a
+checkout containing `recipes/libebur128/config.yml`, the generated allowed package pattern is
+`libebur128/*`. Additional package folders produce additional allowed package patterns.
+
+This feature is independent of `#recipe:` annotations. Use a local recipes index for
+ConanCenter-style recipe folders, and keep using `#recipe:` annotations for standalone Git
+repositories that should be cloned and built with `conan create`.
+
+The default settings are:
+
+```cmake
+CONAN_LOCAL_RECIPES_AUTO_REGISTER=TRUE
+CONAN_LOCAL_RECIPES_INDEX=${CMAKE_SOURCE_DIR}/conan-recipes
+CONAN_LOCAL_RECIPES_REMOTE_NAME=local_conan_recipes
+```
+
+Set `CONAN_LOCAL_RECIPES_INDEX` when the recipes checkout lives somewhere else, set
+`CONAN_LOCAL_RECIPES_REMOTE_NAME` when the generated Conan remote needs a project-specific name, or
+set `CONAN_LOCAL_RECIPES_AUTO_REGISTER=FALSE` to disable the behavior.
+
 ## Building package recipes from Git
 
 ***Package not found on conancenter or any configured remote? Not even in your local cache!? cmake-conan has you covered!***

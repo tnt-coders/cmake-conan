@@ -984,6 +984,67 @@ function(conan_install)
 endfunction()
 
 
+function(conan_register_local_recipes_index conan_command)
+    if(NOT CONAN_LOCAL_RECIPES_AUTO_REGISTER)
+        return()
+    endif()
+
+    get_property(_local_recipes_registered GLOBAL PROPERTY CONAN_LOCAL_RECIPES_INDEX_REGISTERED)
+    if(_local_recipes_registered)
+        return()
+    endif()
+    set_property(GLOBAL PROPERTY CONAN_LOCAL_RECIPES_INDEX_REGISTERED TRUE)
+
+    get_filename_component(_local_recipes_index "${CONAN_LOCAL_RECIPES_INDEX}" ABSOLUTE)
+    set(_local_recipes_root "${_local_recipes_index}/recipes")
+    if(NOT IS_DIRECTORY "${_local_recipes_root}")
+        return()
+    endif()
+
+    file(GLOB _local_recipe_dirs LIST_DIRECTORIES true CONFIGURE_DEPENDS "${_local_recipes_root}/*")
+
+    set(_local_recipe_packages)
+    foreach(_local_recipe_dir IN LISTS _local_recipe_dirs)
+        if(IS_DIRECTORY "${_local_recipe_dir}" AND EXISTS "${_local_recipe_dir}/config.yml")
+            get_filename_component(_local_recipe_name "${_local_recipe_dir}" NAME)
+            list(APPEND _local_recipe_packages "${_local_recipe_name}")
+        endif()
+    endforeach()
+
+    if(NOT _local_recipe_packages)
+        message(STATUS "CMake-Conan: local Conan recipes index found at "
+                       "${_local_recipes_index}, but it contains no recipe config.yml files")
+        return()
+    endif()
+
+    list(SORT _local_recipe_packages)
+
+    set(_local_recipe_remote_args
+        remote add "${CONAN_LOCAL_RECIPES_REMOTE_NAME}" "${_local_recipes_index}"
+        --index 0 --type local-recipes-index --recipes-only --force)
+
+    foreach(_local_recipe_package IN LISTS _local_recipe_packages)
+        list(APPEND _local_recipe_remote_args --allowed-packages "${_local_recipe_package}/*")
+    endforeach()
+
+    execute_process(
+        COMMAND "${conan_command}" ${_local_recipe_remote_args}
+        RESULT_VARIABLE _local_recipes_remote_result
+        OUTPUT_VARIABLE _local_recipes_remote_output
+        ERROR_VARIABLE _local_recipes_remote_error
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+    if(NOT _local_recipes_remote_result EQUAL 0)
+        message(FATAL_ERROR "CMake-Conan: failed to register local Conan recipes index: "
+                            "${_local_recipes_remote_error}")
+    endif()
+
+    list(JOIN _local_recipe_packages ", " _local_recipe_package_message)
+    message(STATUS "CMake-Conan: registered local Conan recipes index "
+                   "${_local_recipes_index} for packages: ${_local_recipe_package_message}")
+endfunction()
+
+
 function(conan_get_version conan_command conan_current_version)
     execute_process(
         COMMAND ${conan_command} --version
@@ -1044,6 +1105,7 @@ macro(conan_provide_dependency method package_name)
         find_program(CONAN_COMMAND "conan" REQUIRED)
         conan_get_version(${CONAN_COMMAND} CONAN_CURRENT_VERSION)
         conan_version_check(MINIMUM ${CONAN_MINIMUM_VERSION} CURRENT ${CONAN_CURRENT_VERSION})
+        conan_register_local_recipes_index(${CONAN_COMMAND})
         message(STATUS "CMake-Conan: first find_package() found. Installing dependencies with Conan")
         if("default" IN_LIST CONAN_HOST_PROFILE OR "default" IN_LIST CONAN_BUILD_PROFILE)
             conan_profile_detect_default()
@@ -1205,6 +1267,12 @@ endmacro()
 set(CONAN_HOST_PROFILE "default;auto-cmake" CACHE STRING "Conan host profile")
 set(CONAN_BUILD_PROFILE "default" CACHE STRING "Conan build profile")
 set(CONAN_INSTALL_ARGS "--build=missing" CACHE STRING "Command line arguments for conan install")
+set(CONAN_LOCAL_RECIPES_AUTO_REGISTER TRUE CACHE BOOL
+    "Register a top-level conan-recipes local-recipes-index when one is present")
+set(CONAN_LOCAL_RECIPES_INDEX "${CMAKE_SOURCE_DIR}/conan-recipes" CACHE PATH
+    "Path to an optional Conan local-recipes-index checkout")
+set(CONAN_LOCAL_RECIPES_REMOTE_NAME "local_conan_recipes" CACHE STRING
+    "Conan remote name used for the optional local recipes index")
 
 # Register the deferred host profile detection after CONAN_HOST_PROFILE is defined
 if("auto-cmake" IN_LIST CONAN_HOST_PROFILE)

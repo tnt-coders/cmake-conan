@@ -111,6 +111,46 @@ def create_header_only_recipe_repo(repo_dir, name, header_body, requires_line=""
     write_text(repo_dir / "include" / name / f"{name}.hpp", header_body)
     init_git_repo(repo_dir)
 
+
+def create_header_only_local_recipes_index(index_dir, name, header_body, version="0.1"):
+    recipe_dir = index_dir / "recipes" / name
+    write_text(
+        recipe_dir / "config.yml",
+        f"""
+        versions:
+          "{version}":
+            folder: all
+        """,
+    )
+    write_text(
+        recipe_dir / "all" / "conanfile.py",
+        "\n".join([
+            "import os",
+            "from conan import ConanFile",
+            "from conan.tools.files import copy",
+            "",
+            "",
+            f"class {name.title().replace('-', '')}Conan(ConanFile):",
+            f'    name = "{name}"',
+            '    package_type = "header-library"',
+            '    exports_sources = "include/*"',
+            '    no_copy_source = True',
+            '    settings = "os", "arch", "compiler", "build_type"',
+            "",
+            "    def package(self):",
+            '        copy(self, "*.hpp", os.path.join(self.source_folder, "include"), os.path.join(self.package_folder, "include"))',
+            "",
+            "    def package_info(self):",
+            "        self.cpp_info.bindirs = []",
+            "        self.cpp_info.libdirs = []",
+            f'        self.cpp_info.set_property("cmake_file_name", "{name}")',
+            f'        self.cpp_info.set_property("cmake_target_name", "{name}::{name}")',
+            "",
+        ]),
+    )
+    write_text(recipe_dir / "all" / "include" / name / f"{name}.hpp", header_body)
+
+
 def clear_folder_contents(folder_path):
     if not os.path.isdir(folder_path):
         raise ValueError(f"{folder_path} is not a valid directory.")
@@ -847,6 +887,64 @@ class TestCMakeDepsGenerators:
 
 
 class TestRecipeAnnotations:
+    def test_top_level_local_recipes_index_is_registered(self, capfd, tmp_path, monkeypatch):
+        workdir = tmp_path / "local_recipes_index_test"
+        workdir.mkdir()
+        source_dir = workdir / "src"
+        binary_dir = workdir / "build"
+        source_dir.mkdir()
+        binary_dir.mkdir()
+        monkeypatch.chdir(binary_dir)
+
+        create_header_only_local_recipes_index(
+            source_dir / "conan-recipes",
+            "localindexrecipe",
+            """
+            #pragma once
+
+            inline int local_index_value() { return 11; }
+            """,
+        )
+        write_text(
+            source_dir / "conanfile.txt",
+            """
+            [requires]
+            localindexrecipe/0.1
+
+            [generators]
+            CMakeDeps
+            """,
+        )
+        write_text(
+            source_dir / "CMakeLists.txt",
+            """
+            cmake_minimum_required(VERSION 3.24)
+            project(LocalRecipesIndex CXX)
+
+            set(CMAKE_CXX_STANDARD 17)
+            find_package(localindexrecipe REQUIRED)
+            add_executable(app main.cpp)
+            target_link_libraries(app PRIVATE localindexrecipe::localindexrecipe)
+            """,
+        )
+        write_text(
+            source_dir / "main.cpp",
+            """
+            #include <localindexrecipe/localindexrecipe.hpp>
+
+            int main()
+            {
+                return local_index_value() == 11 ? 0 : 1;
+            }
+            """,
+        )
+
+        run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release")
+        out, _ = capfd.readouterr()
+        assert "registered local Conan recipes index" in out
+        assert "for packages: localindexrecipe" in out
+        run("cmake --build .")
+
     def test_branch_recipe_annotations_reconfigure_without_local_branch_ref(self, capfd, tmp_path, monkeypatch):
         repo_dir = tmp_path / "branch_recipe"
         create_header_only_recipe_repo(
