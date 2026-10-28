@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import platform
@@ -1146,6 +1147,70 @@ class TestRecipeAnnotations:
         run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release")
         out, _ = capfd.readouterr()
         assert f"Found recipe for standalone/0.1: {repo_uri}" in out
+
+
+class TestConanHome:
+    def test_cached_home_wins_on_build_tool_rerun(self, capfd, tmp_path, monkeypatch):
+        "A CONAN_HOME cache entry outranks the environment, including when the build tool re-runs CMake"
+        workdir = tmp_path / "conan_home_test"
+        source_dir = workdir / "src"
+        binary_dir = workdir / "build"
+        tree_home = workdir / "tree_home"
+        source_dir.mkdir(parents=True)
+        binary_dir.mkdir()
+        monkeypatch.chdir(binary_dir)
+
+        create_header_only_local_recipes_index(
+            source_dir / "conan-recipes",
+            "homeprobe",
+            """
+            #pragma once
+
+            inline int home_probe_value() { return 0; }
+            """,
+        )
+        write_text(
+            source_dir / "conanfile.txt",
+            """
+            [requires]
+            homeprobe/0.1
+
+            [generators]
+            CMakeDeps
+            """,
+        )
+        write_text(
+            source_dir / "CMakeLists.txt",
+            """
+            cmake_minimum_required(VERSION 3.24)
+            project(ConanHomeProbe CXX)
+
+            find_package(homeprobe REQUIRED)
+            """,
+        )
+
+        def assert_resolved_in_tree_home():
+            data_files = list((binary_dir / "conan").glob("homeprobe-release-*-data.cmake"))
+            assert len(data_files) == 1
+            assert tree_home.as_posix().lower() in data_files[0].read_text(encoding="utf-8").lower()
+
+        # The session fixture exports a different CONAN_HOME, so the environment conflicts with the
+        # cache entry throughout.
+        generator = "-GNinja" if platform.system() == "Windows" else ""
+        run(f"cmake -S {source_dir} -B {binary_dir} {generator} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release -DCONAN_HOME={tree_home.as_posix()}")
+        out, _ = capfd.readouterr()
+        assert expected_conan_install_outputs[0] in out
+        assert_resolved_in_tree_home()
+        assert "local_conan_recipes" in (tree_home / "remotes.json").read_text(encoding="utf-8")
+        session_list = run_capture(["conan", "list", "homeprobe/0.1", "--format=json"])
+        assert "homeprobe/0.1" not in json.loads(session_list.stdout)["Local Cache"]
+
+        # Building without a preset re-runs CMake from the build tool, as a raw ninja invocation does.
+        (source_dir / "conanfile.txt").touch()
+        run("cmake --build .")
+        out, _ = capfd.readouterr()
+        assert expected_conan_install_outputs[0] in out
+        assert_resolved_in_tree_home()
 
 
 class TestTryCompile:

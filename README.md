@@ -189,6 +189,9 @@ If the package version string does not resolve to a valid Git tag/branch name, C
 * When using a single-configuration CMake generator, you must specify a valid `CMAKE_BUILD_TYPE` (can't be left blank). Alternatively, `CONAN_INSTALL_BUILD_CONFIGURATIONS` can be set to a non-empty list of build types (see next section).
 * Deriving Conan settings is currently only supported on the most common platforms with the most popular compilers.
 
+## Pinning the Conan home per build tree
+`-DCONAN_HOME=<absolute path>` pins the Conan home (its cache and config) for that build tree. The provider exports it to every Conan call, including the re-runs of CMake a build tool triggers on its own, which carry none of a preset's environment. Left empty (the default), Conan resolves its home as usual: a `.conanrc` file, then the `CONAN_HOME` environment variable, then `~/.conan2`.
+
 ## Customizing Conan profiles
 The CMake-Conan dependency provider will create a Conan profile where the settings (`os`, `arch`, `compiler`, `build_type`) are retrieved from what CMake has detected for the current build. Conan uses two profiles for dependencies, the _host_ and the _build_ profiles. You can read more about them [here](https://docs.conan.io/2.0/tutorial/consuming_packages/cross_building_with_conan.html?highlight=build%20profile#conan-two-profiles-model-build-and-host-profiles). In CMake-Conan, the default behaviour is as follows:
 

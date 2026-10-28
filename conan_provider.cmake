@@ -1273,6 +1273,13 @@ set(CONAN_LOCAL_RECIPES_INDEX "${CMAKE_SOURCE_DIR}/conan-recipes" CACHE PATH
     "Path to an optional Conan local-recipes-index checkout")
 set(CONAN_LOCAL_RECIPES_REMOTE_NAME "local_conan_recipes" CACHE STRING
     "Conan remote name used for the optional local recipes index")
+# Conan reads its home only from the environment, which a build tool's re-run of CMake does not
+# carry, so a build tree that owns its home states it here and every Conan call inherits it.
+set(CONAN_HOME "" CACHE PATH
+    "Conan home (cache and config) for this build tree; empty keeps Conan's own resolution")
+if(CONAN_HOME)
+    set(ENV{CONAN_HOME} "${CONAN_HOME}")
+endif()
 
 # Register the deferred host profile detection after CONAN_HOST_PROFILE is defined
 if("auto-cmake" IN_LIST CONAN_HOST_PROFILE)
