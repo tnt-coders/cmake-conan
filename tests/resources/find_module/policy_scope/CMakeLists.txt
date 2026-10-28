@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.5)
 project(MyApp CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -9,13 +9,12 @@ find_package(bye MODULE REQUIRED)
 
 # The `find_package` will include the conan_provider.cmake file
 # which has policy-affecting code. We expect no changes to the current
-# policy scope.
+# policy scope: the provider requires CMake 3.24 in a scope of its own, so
+# CMP0135 (introduced in CMake 3.24) stays unset under this project's 3.5.
+# 3.5 is the oldest minimum CMake 4 still accepts.
 
 add_executable(app main.cpp)
 target_link_libraries(app hello::hello bye::bye)
 
-set(test_list a b c d e f)
-if("a" IN_LIST test_list)
-    # see https://cmake.org/cmake/help/latest/policy/CMP0057.html
-    message(ERROR "this should not happen as IN_LIST is a CMake 3.3 feature.")
-endif()
+cmake_policy(GET CMP0135 cmp0135_state)
+message(STATUS "CMP0135 after find_package: '${cmp0135_state}'")

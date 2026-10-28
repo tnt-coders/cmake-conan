@@ -488,7 +488,7 @@ endfunction()
 function(conan_package_exists package_ref cache_found_var remote_found_var)
     # Check local cache first
     execute_process(
-        COMMAND conan list ${package_ref}
+        COMMAND ${CONAN_COMMAND} list ${package_ref}
         RESULT_VARIABLE result
         OUTPUT_VARIABLE output
         ERROR_VARIABLE error
@@ -504,7 +504,7 @@ function(conan_package_exists package_ref cache_found_var remote_found_var)
 
     # Check all known remotes (-r=* means "all configured remotes")
     execute_process(
-        COMMAND conan list ${package_ref} -r=*
+        COMMAND ${CONAN_COMMAND} list ${package_ref} -r=*
         RESULT_VARIABLE result
         OUTPUT_VARIABLE output
         ERROR_VARIABLE error
@@ -549,6 +549,11 @@ endfunction()
 #   conanfile.py:   self.requires("mypkg/1.0.0")          # recipe: https://github.com/org/mypkg.git
 #   conanfile.txt:  mypkg/1.0.0                            # recipe: https://github.com/org/mypkg.git
 #
+# In conanfile.py the reference is the call's first argument, in single or double quotes, and
+# further arguments may follow; in conanfile.txt the line must be in [requires]. Commented-out
+# lines are skipped, and any other annotation draws a warning. Tool requirements are not created
+# from Git: conan create would build them for the host rather than the build context.
+#
 # For each annotated requirement, this function:
 #   - Appends the package name to the list in ${recipes_out}
 #   - Sets the following variables in the PARENT_SCOPE (keyed by package name):
@@ -564,100 +569,67 @@ function(parse_recipe_annotations conanfile_path recipes_out)
     set(_recipes)
     file(READ "${conanfile_path}" _conanfile_contents)
 
+    # Collect, in file order, every line that carries a "recipe:" comment and, for a
+    # conanfile.txt, its section headers. The leading newline makes every match start at a
+    # line start, so [^\n#]* is the line's code part: a line whose code part is empty is a
+    # comment, and is skipped below.
+    #
+    # Each file kind only splits a requirement line into its reference (MATCH_1) and its
+    # comment (MATCH_2); the reference and comment grammars below are shared.
     if("${conanfile_path}" MATCHES "conanfile[.]py$")
-        # Collect every line that contains a self.requires() call (lines starting with
-        # '#' are excluded by [^\n#]* so already-commented-out lines are ignored).
-        string(REGEX MATCHALL "[^\n#]*self[.]requires[^\n]*" _recipe_matches "${_conanfile_contents}")
-        foreach(_recipe_match IN LISTS _recipe_matches)
-            # Match self.requires("name/version@user/channel")  # recipe: <url>.git
-            #
-            # Sorry this is so ugly... CMake has limited regex support
-            #
-            # Capture group breakdown:
-            #   MATCH_1 = full Conan ref, e.g. "mypkg/1.0.0@myorg/stable"
-            #   MATCH_2 = package name,   e.g. "mypkg"
-            #   MATCH_3 = version,        e.g. "1.0.0"
-            #   MATCH_4 = @user/channel   e.g. "@myorg/stable" (optional)
-            #   MATCH_5 = user,           e.g. "myorg"   (empty if no @user/channel)
-            #   MATCH_6 = /channel,       e.g. "/stable" (optional)
-            #   MATCH_7 = channel,        e.g. "stable"  (empty if no /channel)
-            #   MATCH_8 = git repo URL,   e.g. "https://github.com/org/mypkg.git"
-            string(
-                REGEX MATCH
-                "self[.]requires[(]\"(([^/]+)/([^@]+)([@]([^/\"]+)(/([^\"]+))?[^\"]*)?)\"[)].*[#].*recipe:[ \t]*(([^ \t]+)[.]git)"
-                _recipe_found
-                "${_recipe_match}"
-            )
-
-            if(_recipe_found)
-                string(STRIP "${CMAKE_MATCH_1}" _recipe_ref)
-                string(STRIP "${CMAKE_MATCH_2}" _recipe_name)
-                list(APPEND _recipes "${_recipe_name}")
-                set(_recipe_${_recipe_name}_ref "${_recipe_ref}" PARENT_SCOPE)
-                string(STRIP "${CMAKE_MATCH_3}" _recipe_version)
-                set(_recipe_${_recipe_name}_version "${_recipe_version}" PARENT_SCOPE)
-                string(STRIP "${CMAKE_MATCH_5}" _recipe_user)
-                set(_recipe_${_recipe_name}_user "${_recipe_user}" PARENT_SCOPE)
-                string(STRIP "${CMAKE_MATCH_7}" _recipe_channel)
-                set(_recipe_${_recipe_name}_channel "${_recipe_channel}" PARENT_SCOPE)
-                string(STRIP "${CMAKE_MATCH_8}" _recipe_repo)
-                set(_recipe_${_recipe_name}_repo "${_recipe_repo}" PARENT_SCOPE)
-            endif()
-        endforeach()
+        string(REGEX MATCHALL "\n[^\n#]*[#][^\n]*recipe:[^\n]*" _annotated_lines
+               "\n${_conanfile_contents}")
+        # No section headers: _section is fixed, so only the line pattern decides.
+        set(_section "requires")
+        set(_requirement_line_regex
+            "^[^#]*self[.]requires[(][ \t]*[\"']([^\"']+)[\"'][^#]*[#](.*)$")
     elseif("${conanfile_path}" MATCHES "conanfile[.]txt$")
-        # Extract everything between "[requires]" and the next "[" section header.
-        # The regex captures all text after the [requires] line up to (but not
-        # including) the next "[" (which would be the start of another section).
-        string(REGEX MATCH "\\[requires\\][^\n]*\n([^[]*)" _requires_section "${_conanfile_contents}")
-
-        if(_requires_section)
-            set(_requires_content "${CMAKE_MATCH_1}")
-            # Split on newlines (handle both Unix LF and Windows CRLF) to get
-            # individual requirement lines, then process each one.
-            string(REGEX REPLACE "\r?\n" ";" _requirement_lines "${_requires_content}")
-            foreach(_requirement_line IN LISTS _requirement_lines)
-                string(STRIP "${_requirement_line}" _requirement_line_stripped)
-                if(NOT _requirement_line_stripped)
-                    continue()
-                endif()
-
-                # Match  name/version@user/channel  # recipe: <url>.git
-                #
-                # Sorry this is so ugly... CMake has limited regex support
-                #
-                # Capture group breakdown:
-                #   MATCH_1 = full Conan ref, e.g. "mypkg/1.0.0@myorg/stable"
-                #   MATCH_2 = package name,   e.g. "mypkg"
-                #   MATCH_3 = version,        e.g. "1.0.0"
-                #   MATCH_4 = @user/channel   e.g. "@myorg/stable" (optional)
-                #   MATCH_5 = user,           e.g. "myorg"   (empty if no @user/channel)
-                #   MATCH_6 = /channel,       e.g. "/stable" (optional)
-                #   MATCH_7 = channel,        e.g. "stable"  (empty if no /channel)
-                #   MATCH_8 = git repo URL,   e.g. "https://github.com/org/mypkg.git"
-                string(
-                    REGEX MATCH
-                    "(([^/#@]+)/([^@]+)([@]([^/#]+)(/([^#]+))?)?).*[#].*recipe:[ \t]*(([^ \t]+)[.]git)"
-                    _recipe_found
-                    "${_requirement_line}"
-                )
-
-                if(_recipe_found)
-                    string(STRIP "${CMAKE_MATCH_1}" _recipe_ref)
-                    string(STRIP "${CMAKE_MATCH_2}" _recipe_name)
-                    list(APPEND _recipes "${_recipe_name}")
-                    set(_recipe_${_recipe_name}_ref "${_recipe_ref}" PARENT_SCOPE)
-                    string(STRIP "${CMAKE_MATCH_3}" _recipe_version)
-                    set(_recipe_${_recipe_name}_version "${_recipe_version}" PARENT_SCOPE)
-                    string(STRIP "${CMAKE_MATCH_5}" _recipe_user)
-                    set(_recipe_${_recipe_name}_user "${_recipe_user}" PARENT_SCOPE)
-                    string(STRIP "${CMAKE_MATCH_7}" _recipe_channel)
-                    set(_recipe_${_recipe_name}_channel "${_recipe_channel}" PARENT_SCOPE)
-                    string(STRIP "${CMAKE_MATCH_8}" _recipe_repo)
-                    set(_recipe_${_recipe_name}_repo "${_recipe_repo}" PARENT_SCOPE)
-                endif()
-            endforeach()
-        endif()
+        string(REGEX MATCHALL "\n[ \t]*(\\[[a-z_]+\\]|[^\n#]*[#][^\n]*recipe:)[^\n]*"
+               _annotated_lines "\n${_conanfile_contents}")
+        set(_section "")
+        set(_requirement_line_regex "^([^#]+)[#](.*)$")
     endif()
+
+    foreach(_annotated_line IN LISTS _annotated_lines)
+        string(STRIP "${_annotated_line}" _annotated_line)
+        if(_annotated_line MATCHES "^\\[([a-z_]+)\\]")
+            set(_section "${CMAKE_MATCH_1}")
+            continue()
+        elseif(_annotated_line MATCHES "^#")
+            # A commented-out line
+            continue()
+        endif()
+
+        set(_recipe_found FALSE)
+        if(_section STREQUAL "requires" AND _annotated_line MATCHES "${_requirement_line_regex}")
+            string(STRIP "${CMAKE_MATCH_1}" _recipe_ref)
+            set(_recipe_comment "${CMAKE_MATCH_2}")
+            # The comment: recipe: <url>.git
+            if(_recipe_comment MATCHES "recipe:[ \t]*([^ \t]+[.]git)([ \t]|$)")
+                set(_recipe_repo "${CMAKE_MATCH_1}")
+                # The reference: name/version[@user[/channel]]
+                if(_recipe_ref MATCHES "^([^/@]+)/([^@]+)(@([^/]+)(/(.+))?)?$")
+                    set(_recipe_found TRUE)
+                endif()
+            endif()
+        endif()
+
+        if(_recipe_found)
+            set(_recipe_name "${CMAKE_MATCH_1}")
+            list(APPEND _recipes "${_recipe_name}")
+            set(_recipe_${_recipe_name}_ref "${_recipe_ref}" PARENT_SCOPE)
+            set(_recipe_${_recipe_name}_version "${CMAKE_MATCH_2}" PARENT_SCOPE)
+            set(_recipe_${_recipe_name}_user "${CMAKE_MATCH_4}" PARENT_SCOPE)
+            set(_recipe_${_recipe_name}_channel "${CMAKE_MATCH_6}" PARENT_SCOPE)
+            set(_recipe_${_recipe_name}_repo "${_recipe_repo}" PARENT_SCOPE)
+        else()
+            message(WARNING "CMake-Conan: ignoring a recipe annotation in ${conanfile_path}. "
+                            "Annotations are read only on a regular requirement written as "
+                            "self.requires(\"<ref>\", ...) in conanfile.py or as a [requires] "
+                            "line in conanfile.txt, with a URL ending in .git: "
+                            "${_annotated_line}")
+        endif()
+    endforeach()
 
     set(${recipes_out} "${_recipes}" PARENT_SCOPE)
 endfunction()
@@ -716,7 +688,7 @@ function(conan_create)
 
     # Check if the provided git_ref is a tag (tags are treated as stable so conan create will not re-run)
     execute_process(
-        COMMAND git ls-remote --tags ${args_GIT_REPOSITORY} ${args_GIT_REF}
+        COMMAND ${GIT_EXECUTABLE} ls-remote --tags ${args_GIT_REPOSITORY} ${args_GIT_REF}
         RESULT_VARIABLE return_code
         OUTPUT_VARIABLE git_tag_exists
         ERROR_VARIABLE git_stderr
@@ -782,20 +754,11 @@ function(conan_create)
                                         "for branch \"${args_GIT_REF}\" in ${recipe_path}")
                 endif()
 
-                # Get remote commit hash for the same branch
-                execute_process(
-                    COMMAND git ls-remote --heads ${args_GIT_REPOSITORY} ${args_GIT_REF}
-                    RESULT_VARIABLE return_code
-                    OUTPUT_VARIABLE git_remote_output
-                    ERROR_VARIABLE git_stderr
-                    ECHO_ERROR_VARIABLE    # show the text output regardless
-                    WORKING_DIRECTORY ${recipe_path}
-                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+                # The branch query above already holds the remote commit: ls-remote returns
+                # "<hash>\t<ref>", we need just the hash
+                string(REGEX MATCH "^[0-9a-fA-F]+" git_remote_hash "${git_branch_exists}")
 
-                # ls-remote returns "<hash>\t<ref>", we need just the hash
-                string(REGEX MATCH "^[0-9a-fA-F]+" git_remote_hash "${git_remote_output}")
-
-                if(NOT "${return_code}" STREQUAL "0" OR NOT git_remote_hash)
+                if(NOT git_remote_hash)
                     message(FATAL_ERROR "CMake-Conan: Failed to establish remote Git hash for branch "
                                         "\"${args_GIT_REF}\" in ${args_GIT_REPOSITORY}")
                 endif()
@@ -1168,7 +1131,7 @@ macro(conan_provide_dependency method package_name)
                 CONAN_REF ${_recipe_${_recipe}_ref}
                 GIT_REPOSITORY ${_recipe_${_recipe}_repo}
                 GIT_REF ${_git_ref}
-                CONAN_CREATE_ARGS ${_host_profile_flags} ${_build_profile_flags} -s build_type=${_create_build_type} ${_self_build_config} ${CONAN_INSTALL_ARGS}
+                CONAN_CREATE_ARGS ${_host_profile_flags} ${_build_profile_flags} -s build_type=${_create_build_type} ${CONAN_INSTALL_ARGS}
             )
         endforeach()
         

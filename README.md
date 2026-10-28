@@ -17,7 +17,7 @@ CMake dependency provider for the Conan C and C++ package manager.
 > 2. Go to **Virus & threat protection** > **Virus & threat protection settings** > **Manage settings**
 > 3. Scroll to **Exclusions** > **Add or remove exclusions**
 > 4. Click **Add an exclusion** > **Folder**
-> 5. Select your Conan cache directory (default: `C:\Users\<username>\.conan2\`)
+> 5. Select your Conan cache directory (default: `C:\Users\<username>\.conan2\`, or the [`CONAN_HOME`](#pinning-the-conan-home-per-build-tree) a build tree pins)
 >
 > You can find your cache location by running `conan config home`.
 
@@ -26,6 +26,7 @@ CMake dependency provider for the Conan C and C++ package manager.
 Prerequisites:
 * CMake 3.24
 * Conan 2.0.5
+* Git (the provider requires it at configure time)
 * A CMake-based project that contains a `conanfile.txt` or `conanfile.py` to list the required dependencies.
 
 First, clone this repository
@@ -51,7 +52,7 @@ cmake --build build --config Release
 
 * When first invoking CMake to configure the project, pass `-DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=[path-to-cmake-conan]/conan_provider.cmake`. This will ensure that `conan install` is invoked from within CMake. This integration **does not require making any changes to your `CMakeLists.txt` scripts**.
 
-* Host profile detection is deferred until after compilers are configured, so the generated `conan_host_profile` is available even for projects that have no Conan dependencies (where `find_package()` is never called).
+* When `CONAN_HOST_PROFILE` contains `auto-cmake` (the default), host profile detection is deferred until after compilers are configured, so the generated `${CMAKE_BINARY_DIR}/conan_host_profile` is available even for projects that have no Conan dependencies (where `find_package()` is never called).
 
 ## Using a local recipes index
 
@@ -78,8 +79,9 @@ my-project/
 With that directory present, no extra `CMAKE_PROJECT_TOP_LEVEL_INCLUDES` wrapper is needed. Continue
 pointing CMake at `conan_provider.cmake` as usual. On the first dependency resolution,
 cmake-conan registers `${CMAKE_SOURCE_DIR}/conan-recipes` as a recipes-only
-`local-recipes-index` remote, then proceeds with the normal `#recipe:` handling and
-`conan install` flow.
+`local-recipes-index` remote at the highest priority (index 0), then proceeds with the normal
+`#recipe:` handling and `conan install` flow. The remote is written to the active Conan home's
+remote list and stays there; later configures overwrite it in place.
 
 For a project that uses Git submodules, add the shared recipes checkout at the repository root:
 
@@ -109,7 +111,9 @@ recipe and stores it in the same cache used by the rest of the dependency graph.
 
 cmake-conan restricts the local recipes remote to package folders that contain `config.yml`. For a
 checkout containing `recipes/libebur128/config.yml`, the generated allowed package pattern is
-`libebur128/*`. Additional package folders produce additional allowed package patterns.
+`libebur128/*`. Additional package folders produce additional allowed package patterns. If the
+index has no `recipes/` folder, nothing is registered; if no package folder holds a `config.yml`,
+cmake-conan reports that and registers nothing.
 
 This feature is independent of `#recipe:` annotations. Use a local recipes index for
 ConanCenter-style recipe folders, and keep using `#recipe:` annotations for standalone Git
@@ -149,16 +153,20 @@ mypackage/1.2.3  #recipe: https://github.com/user/mypackage.git
 private/2.0.0@myuser/stable  #recipe: https://github.com/org/private.git
 ```
 
+The annotation must sit on the same line as the requirement, and only regular requirements are read: `self.requires(...)` calls in `conanfile.py` and lines of the `[requires]` section of `conanfile.txt`. In `conanfile.py`, the reference must be the call's first argument, as a string literal in single or double quotes; further arguments may follow. Commented-out lines are skipped. Any other annotation draws a warning and its requirement is resolved as usual: one on a tool requirement (`conan create` would build it for the host rather than the build context), a reference built at runtime, or a URL that does not end in `.git`.
+
 Annotated dependencies are resolved recursively. If a recipe created from Git declares its own `#recipe:`-annotated requirements, cmake-conan will create those transitive dependencies first before running `conan create` for the parent package.
 
-The recipe URL can point to any Git clone target that ends in `.git`, including `https://`, SSH, or local `file://` URLs.
+The recipe URL can point to any Git clone target that ends in `.git`, including `https://`, SSH, or local `file://` URLs. The repository must hold the recipe's `conanfile.py` at its root. It is queried with `git ls-remote` on every configure that runs `conan install`, so it must be reachable even when the package is already cached or published.
 
 When cmake-conan encounters a package with a `#recipe:` annotation, it performs the following checks:
 
 1. **Remote check:** If the package exists on a configured Conan remote, it is used directly (no build required).
 2. **Cache + tag check:** If the package exists in the local cache and the version resolves to a Git tag, the cached package is used (tags are treated as [immutable](#tag-immutability)).
-3. **Cache + branch check:** If the package exists in the local cache but the version resolves to a Git branch, cmake-conan compares the local and remote commit hashes. The package is only rebuilt if the branch has new commits.
-4. **Build from source:** If none of the above conditions are met, cmake-conan clones the repository, checks out the appropriate tag/branch, runs `conan create`, and continues with `conan install`.
+3. **Cache + branch check:** If the package exists in the local cache but the version resolves to a Git branch, cmake-conan compares the commit of the recipe clone this build tree kept (under `${CMAKE_BINARY_DIR}/conan/_recipes/<name>`) with the branch's remote head. The cached package is removed and rebuilt if the branch has new commits, or if this build tree has no clone to compare.
+4. **Build from source:** If none of the above conditions are met, cmake-conan shallow-clones the repository (with submodules) at the appropriate tag/branch, runs `conan create`, and continues with `conan install`.
+
+`conan create` receives the same host and build profiles as `conan install`, plus `CONAN_INSTALL_ARGS`. Its `build_type` is `CMAKE_BUILD_TYPE`, or `Release` with a multi-configuration generator. The package's `test_package` step is skipped.
 
 ### Version Resolution: Tags vs Branches
 
@@ -175,7 +183,7 @@ The derived Git ref is checked against the repository for a matching tag first, 
 
 **Branches:** Branches are useful during active development when you want to consume a package without tagging an untested version. However, because branches are mutable, cmake-conan checks for new remote commits on each build and rebuilds the package when changes are detected.
 
-If the package version string does not resolve to a valid Git tag/branch name, CMake generation will abort with an appropriate error message.
+If the derived Git ref matches no tag or branch, configuration aborts when the package has to be built, because the clone fails. If a package with that reference is already cached, cmake-conan uses it with a warning that its integrity cannot be verified.
 
 ### Tag Immutability
 
@@ -190,7 +198,7 @@ If the package version string does not resolve to a valid Git tag/branch name, C
 * Deriving Conan settings is currently only supported on the most common platforms with the most popular compilers.
 
 ## Pinning the Conan home per build tree
-`-DCONAN_HOME=<absolute path>` pins the Conan home (its cache and config) for that build tree. The provider exports it to every Conan call, including the re-runs of CMake a build tool triggers on its own, which carry none of a preset's environment. Left empty (the default), Conan resolves its home as usual: a `.conanrc` file, then the `CONAN_HOME` environment variable, then `~/.conan2`.
+`-DCONAN_HOME=<absolute path>` pins the Conan home (its cache and config) for that build tree. The provider exports it as the `CONAN_HOME` environment variable of every Conan call, overriding any `CONAN_HOME` already in the environment, and does so again on the re-runs of CMake a build tool triggers on its own, which carry none of a preset's environment. Conan still reads a `.conanrc` file found in or above the working directory before the environment, so a `.conanrc` outranks this setting. Left empty (the default), Conan resolves its home as usual: a `.conanrc` file, then the `CONAN_HOME` environment variable, then `~/.conan2`. Because it is a cache variable, a wrapper included before `conan_provider.cmake` can give it a project default.
 
 ## Customizing Conan profiles
 The CMake-Conan dependency provider will create a Conan profile where the settings (`os`, `arch`, `compiler`, `build_type`) are retrieved from what CMake has detected for the current build. Conan uses two profiles for dependencies, the _host_ and the _build_ profiles. You can read more about them [here](https://docs.conan.io/2.0/tutorial/consuming_packages/cross_building_with_conan.html?highlight=build%20profile#conan-two-profiles-model-build-and-host-profiles). In CMake-Conan, the default behaviour is as follows:
@@ -222,8 +230,10 @@ For example:
 ## Customizing the invocation of Conan install
 The CMake-Conan dependency provider will autodetect and pass the profile information as described above. If the `conan install` command invocation needs to be customized further, the `CONAN_INSTALL_ARGS` variable can be used. 
 * By default, `CONAN_INSTALL_ARGS` is initialised to pass `--build=missing`. If you customize this variable, please be aware that Conan will revert to its default behaviour unless you specify the `--build` flag.
+* `CONAN_INSTALL_ARGS` is also passed to the `conan create` calls that build [`#recipe:` packages](#building-package-recipes-from-git).
 * Some arguments are reserved for the dependency provider implementation and must not be set in `CONAN_INSTALL_ARGS`:
   * The path to a `conanfile.txt|.py`.
+  * The output folder (`-of`), which is `${CMAKE_BINARY_DIR}/conan`.
   * The output format (`--format`).
   * The build type setting (`-s build_type=...`).
 * Values are semi-colon separated, e.g. `--build=never;--update;--lockfile-out=''`

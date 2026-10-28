@@ -33,6 +33,7 @@ unix = pytest.mark.skipif(platform.system() != "Linux" and platform.system() != 
 linux = pytest.mark.skipif(platform.system() != "Linux", reason="Linux only")
 darwin = pytest.mark.skipif(platform.system() != "Darwin", reason="Darwin only")
 windows = pytest.mark.skipif(platform.system() != "Windows", reason="Windows only")
+android_ndk = pytest.mark.skipif("ANDROID_NDK_ROOT" not in os.environ, reason="needs ANDROID_NDK_ROOT set to an Android NDK")
 
 
 def run(cmd, check=True):
@@ -41,6 +42,28 @@ def run(cmd, check=True):
 
 def run_capture(cmd, cwd=None, check=True):
     return subprocess.run(cmd, cwd=cwd, check=check, capture_output=True, text=True)
+
+
+def visual_studio_generator(component):
+    """The -G and CMAKE_GENERATOR_INSTANCE arguments that select the newest installed Visual Studio
+    holding the workload component, among those this CMake has a generator for; None if none does."""
+    vswhere = Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)"),
+                   "Microsoft Visual Studio", "Installer", "vswhere.exe")
+    if not vswhere.is_file():
+        return None
+    instances = json.loads(run_capture([str(vswhere), "-products", "*", "-requires", component,
+                                        "-format", "json"]).stdout)
+    generators = [generator["name"] for generator in
+                  json.loads(run_capture(["cmake", "-E", "capabilities"]).stdout)["generators"]]
+    instances.sort(key=lambda instance: [int(part) for part in instance["installationVersion"].split(".")],
+                   reverse=True)
+    for instance in instances:
+        major = instance["installationVersion"].split(".")[0]
+        for generator in generators:
+            if generator.startswith(f"Visual Studio {major} "):
+                instance_path = Path(instance["installationPath"]).as_posix()
+                return f'-G "{generator}" -DCMAKE_GENERATOR_INSTANCE="{instance_path}"'
+    return None
 
 
 def write_text(path, content):
@@ -431,13 +454,11 @@ class TestFindModules:
         source_dir, binary_dir = basic_cmake_project
         shutil.copytree(resources_dir / 'find_module' / 'policy_scope', source_dir, dirs_exist_ok=True)
 
-        run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release", check=False)
-        out, err = capfd.readouterr()
-        assert not re.search(rf'CMake Error at {re.escape(str(conan_provider))}.*\(if\):\n  if given arguments', err)
+        run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release")
+        out, _ = capfd.readouterr()
         assert "Conan: Target declared 'hello::hello'" in out
         assert "Conan: Target declared 'bye::bye'" in out
-        assert "\"a\" \"IN_LIST\" \"test_list\"" in err
-        assert "this should not happen as IN_LIST is a CMake 3.3 feature." not in err
+        assert "CMP0135 after find_package: ''" in out
 
 
 
@@ -671,6 +692,7 @@ class TestOsVersion:
         out, _ = capfd.readouterr()
         assert "os.version=10.15" not in out
 
+@android_ndk
 class TestAndroid:
     def test_android_armv8(self, capfd, basic_cmake_project):
         "Building for Android armv8"
@@ -832,24 +854,34 @@ class TestAppleOS:
 
 
 class TestMSVCArch:
+    @staticmethod
+    def generator_with(component):
+        generator = visual_studio_generator(f"Microsoft.VisualStudio.Component.VC.Tools.{component}")
+        if generator is None:
+            pytest.skip(f"no Visual Studio with the MSVC {component} build tools has a generator in this CMake")
+        return generator
+
     @windows
     def test_msvc_arm64(self, capfd, basic_cmake_project):
         source_dir, binary_dir = basic_cmake_project
-        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -G "Visual Studio 17 2022" -A ARM64')
+        generator = self.generator_with("ARM64")
+        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} {generator} -A ARM64')
         out, _ = capfd.readouterr()
         assert "arch=armv8" in out
 
     @windows
     def test_msvc_x86_64(self, capfd, basic_cmake_project):
         source_dir, binary_dir = basic_cmake_project
-        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -G "Visual Studio 17 2022" -A x64')
+        generator = self.generator_with("x86.x64")
+        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} {generator} -A x64')
         out, _ = capfd.readouterr()
         assert "arch=x86_64" in out
 
     @windows
     def test_msvc_x86(self, capfd, basic_cmake_project):
         source_dir, binary_dir = basic_cmake_project
-        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -G "Visual Studio 17 2022" -A Win32')
+        generator = self.generator_with("x86.x64")
+        run(f'cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} {generator} -A Win32')
         out, _ = capfd.readouterr()
         assert "arch=x86" in out
 
@@ -1147,6 +1179,154 @@ class TestRecipeAnnotations:
         run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release")
         out, _ = capfd.readouterr()
         assert f"Found recipe for standalone/0.1: {repo_uri}" in out
+
+    def test_py_recipe_annotations_accept_single_quotes_and_further_arguments(self, capfd, tmp_path, monkeypatch):
+        child_repo = tmp_path / "quotedchild"
+        create_header_only_recipe_repo(
+            child_repo,
+            "quotedchild",
+            """
+            #pragma once
+
+            inline int quoted_child_value() { return 0; }
+            """,
+        )
+
+        child_repo_uri = (child_repo / ".git").resolve().as_uri()
+        parent_repo = tmp_path / "quotedparent"
+        create_header_only_recipe_repo(
+            parent_repo,
+            "quotedparent",
+            """
+            #pragma once
+            #include <quotedchild/quotedchild.hpp>
+            """,
+            requires_line=f"self.requires('quotedchild/0.1@myuser/stable', transitive_headers=True)  #recipe: {child_repo_uri}",
+            cpp_requires="quotedchild::quotedchild",
+        )
+
+        workdir = tmp_path / "quoted_recipe_test"
+        source_dir = workdir / "src"
+        binary_dir = workdir / "build"
+        source_dir.mkdir(parents=True)
+        binary_dir.mkdir()
+        monkeypatch.chdir(binary_dir)
+
+        parent_repo_uri = (parent_repo / ".git").resolve().as_uri()
+        write_text(
+            source_dir / "conanfile.txt",
+            f"""
+            [requires]
+            quotedparent/0.1  #recipe: {parent_repo_uri}
+
+            [generators]
+            CMakeDeps
+            """,
+        )
+        write_text(
+            source_dir / "CMakeLists.txt",
+            """
+            cmake_minimum_required(VERSION 3.24)
+            project(QuotedRecipeAnnotations CXX)
+
+            find_package(quotedparent REQUIRED)
+            """,
+        )
+
+        run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release")
+        out, err = capfd.readouterr()
+        assert f"Found transitive recipe for quotedchild/0.1@myuser/stable: {child_repo_uri}" in out
+        assert "ignoring a recipe annotation" not in " ".join(err.split())
+
+    def test_unusable_recipe_annotation_warns(self, capfd, tmp_path, monkeypatch):
+        "An annotation that cannot be used warns, a tool requirement's included; a comment is skipped"
+        workdir = tmp_path / "unusable_annotation_test"
+        source_dir = workdir / "src"
+        binary_dir = workdir / "build"
+        source_dir.mkdir(parents=True)
+        binary_dir.mkdir()
+        monkeypatch.chdir(binary_dir)
+
+        # The version range's brackets must not end the [requires] section early.
+        write_text(
+            source_dir / "conanfile.txt",
+            """
+            [requires]
+            bye/[>=0.1 <1]
+            # ghost/0.1  #recipe: https://example.com/ghost.git
+            hello/0.1  #recipe: https://example.com/hello.github
+
+            [tool_requires]
+            hello/0.1  #recipe: https://example.com/tool.git
+
+            [generators]
+            CMakeDeps
+            """,
+        )
+        write_text(
+            source_dir / "CMakeLists.txt",
+            """
+            cmake_minimum_required(VERSION 3.24)
+            project(UnusableRecipeAnnotation CXX)
+
+            find_package(hello REQUIRED)
+            """,
+        )
+
+        run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release")
+        out, err = capfd.readouterr()
+        # CMake rewraps warning text, so compare with the whitespace collapsed.
+        warnings = " ".join(err.split())
+        assert warnings.count("ignoring a recipe annotation") == 2
+        assert "https://example.com/hello.github" in warnings
+        assert "https://example.com/tool.git" in warnings
+        assert "ghost" not in out + err
+        assert "Found recipe for" not in out
+
+    def test_py_recipe_annotations_skip_comments_and_warn_on_tool_requirements(self, capfd, tmp_path, monkeypatch):
+        workdir = tmp_path / "py_annotation_scope_test"
+        source_dir = workdir / "src"
+        binary_dir = workdir / "build"
+        source_dir.mkdir(parents=True)
+        binary_dir.mkdir()
+        monkeypatch.chdir(binary_dir)
+
+        write_text(
+            source_dir / "conanfile.py",
+            """
+            from conan import ConanFile
+
+
+            class App(ConanFile):
+                settings = "os", "arch", "compiler", "build_type"
+                generators = "CMakeDeps"
+
+                def requirements(self):
+                    self.requires("hello/0.1")
+                    # self.requires("ghost/0.1")  #recipe: https://example.com/ghost.git
+                    #self.requires("ghost/0.2")  #recipe: https://example.com/ghost.git
+
+                def build_requirements(self):
+                    self.tool_requires("hello/0.1")  #recipe: https://example.com/tool.git
+            """,
+        )
+        write_text(
+            source_dir / "CMakeLists.txt",
+            """
+            cmake_minimum_required(VERSION 3.24)
+            project(PyAnnotationScope CXX)
+
+            find_package(hello REQUIRED)
+            """,
+        )
+
+        run(f"cmake -S {source_dir} -B {binary_dir} -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={conan_provider} -DCMAKE_BUILD_TYPE=Release")
+        out, err = capfd.readouterr()
+        warnings = " ".join(err.split())
+        assert warnings.count("ignoring a recipe annotation") == 1
+        assert "https://example.com/tool.git" in warnings
+        assert "ghost" not in out + err
+        assert "Found recipe for" not in out
 
 
 class TestConanHome:
