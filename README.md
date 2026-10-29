@@ -57,10 +57,8 @@ cmake --build build --config Release
 ## Using a local recipes index
 
 If a project contains a top-level `conan-recipes/` checkout, cmake-conan can consume recipes from
-it automatically before running `conan install`. The intended shared checkout for TNT Coders
-projects is [`tnt-coders/conan-recipes`](https://github.com/tnt-coders/conan-recipes), but any
-checkout with Conan's `local-recipes-index` layout works. That layout is the same high-level shape
-used by ConanCenter:
+it automatically before running `conan install`. Any checkout with Conan's `local-recipes-index`
+layout works. That layout is the same high-level shape used by ConanCenter:
 
 ```text
 my-project/
@@ -83,16 +81,16 @@ cmake-conan registers `${CMAKE_SOURCE_DIR}/conan-recipes` as a recipes-only
 `#recipe:` handling and `conan install` flow. The remote is written to the active Conan home's
 remote list and stays there; later configures overwrite it in place.
 
-For a project that uses Git submodules, add the shared recipes checkout at the repository root:
+For a project that uses Git submodules, add the recipes repository at the repository root:
 
 ```bash
-git submodule add https://github.com/tnt-coders/conan-recipes.git conan-recipes
+git submodule add <recipes-repository-url> conan-recipes
 ```
 
 For a regular checkout, clone it to the same top-level path:
 
 ```bash
-git clone https://github.com/tnt-coders/conan-recipes.git conan-recipes
+git clone <recipes-repository-url> conan-recipes
 ```
 
 For example, a project can declare an unpublished recipe normally:
