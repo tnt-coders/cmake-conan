@@ -1,6 +1,6 @@
 # cmake-conan
 
-[![Build](https://github.com/TNT-Music-Studios/cmake-conan/actions/workflows/cmake_conan.yml/badge.svg)](https://github.com/TNT-Music-Studios/cmake-conan/actions/workflows/cmake_conan.yml)
+[![Build](https://github.com/tnt-music-studios/cmake-conan/actions/workflows/cmake_conan.yml/badge.svg)](https://github.com/tnt-music-studios/cmake-conan/actions/workflows/cmake_conan.yml)
 
 CMake dependency provider for the Conan C and C++ package manager.
 
@@ -32,7 +32,7 @@ Prerequisites:
 First, clone this repository
 
 ```bash
-git clone https://github.com/TNT-Music-Studios/cmake-conan.git
+git clone https://github.com/tnt-music-studios/cmake-conan.git
 ```
 
 ### Example project
@@ -59,7 +59,7 @@ cmake --build build --config Release
 If a project contains a top-level `conan-recipes/` checkout, cmake-conan can consume recipes from
 it automatically before running `conan install`. The intended shared checkout for TNT Music
 Studios projects is
-[`TNT-Music-Studios/conan-recipes`](https://github.com/TNT-Music-Studios/conan-recipes), but any
+[`tnt-music-studios/conan-recipes`](https://github.com/tnt-music-studios/conan-recipes), but any
 checkout with Conan's `local-recipes-index` layout works. That layout is the same high-level shape
 used by ConanCenter:
 
@@ -87,13 +87,13 @@ remote list and stays there; later configures overwrite it in place.
 For a project that uses Git submodules, add the shared recipes checkout at the repository root:
 
 ```bash
-git submodule add https://github.com/TNT-Music-Studios/conan-recipes.git conan-recipes
+git submodule add https://github.com/tnt-music-studios/conan-recipes.git conan-recipes
 ```
 
 For a regular checkout, clone it to the same top-level path:
 
 ```bash
-git clone https://github.com/TNT-Music-Studios/conan-recipes.git conan-recipes
+git clone https://github.com/tnt-music-studios/conan-recipes.git conan-recipes
 ```
 
 For example, a project can declare an unpublished recipe normally:
